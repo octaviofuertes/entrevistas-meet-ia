@@ -79,13 +79,35 @@ export class InterviewEngine {
     this.boundRecallHandler = (evt: any) => this.handleRecallEvent(evt);
     this.recall.events.on('event', this.boundRecallHandler);
 
-    // Bot entra a Meet. Si Recall.ai rechaza la creación, no dejamos la
-    // entrevista marcada como en curso porque en la práctica no empezó.
+    // 1) Generar la primera pregunta + TTS ANTES de joinMeet. Eso nos permite
+    //    mandar el audio como automatic_audio_output, así el bot saluda apenas
+    //    entra al Meet (sin un round-trip extra a /output_audio).
+    // 2) Muletillas en paralelo (no bloquean).
+    const introPromise = this.leia.firstQuestion({
+      job: this.job,
+      candidateName: this.candidate.name,
+    });
+    this.leia
+      .generateFillers({ job: this.job, candidateName: this.candidate.name })
+      .then((fillers) => this.emit('fillers_ready', { fillers }))
+      .catch(() => {});
+
+    const intro = await introPromise;
+    let introAudio: Awaited<ReturnType<typeof this.tts.synthesize>> | null = null;
+    try {
+      introAudio = await this.tts.synthesize(intro);
+    } catch (err) {
+      logger.warn({ err }, 'TTS de la primera pregunta falló; el bot entrará en silencio');
+    }
+
+    // 3) Crear el bot. Pasamos el audio de la primera pregunta como
+    //    automatic_audio_output → el bot lo reproduce apenas entra.
     try {
       const joinRes = await this.recall.joinMeet({
         interviewId: iv.id,
         meetUrl: iv.meetUrl,
         language: this.job.requirements.language,
+        initialAudioBase64: introAudio?.audioBase64,
       });
       if (joinRes.status === 'error') {
         throw new Error('Recall.ai no pudo crear el bot');
@@ -103,22 +125,9 @@ export class InterviewEngine {
       throw err;
     }
 
-    // Primera pregunta + muletillas en paralelo (las muletillas no bloquean).
-    const introPromise = this.leia.firstQuestion({
-      job: this.job,
-      candidateName: this.candidate.name,
-    });
-    // Disparar la generación de muletillas sin esperar; cuando lleguen, emitimos al cliente.
-    this.leia
-      .generateFillers({ job: this.job, candidateName: this.candidate.name })
-      .then((fillers) => {
-        this.emit('fillers_ready', { fillers });
-      })
-      .catch(() => {
-        // ignorar; el cliente tiene fallback chico
-      });
-    const intro = await introPromise;
-    await this.askQuestion(intro);
+    // 4) Registrar la pregunta y emitir eventos al frontend, pero NO volver a
+    //    reproducirla con playAudio (ya la dice automatic_audio_output).
+    await this.askQuestion(intro, { skipBotPlayback: true, preTtsAudio: introAudio ?? undefined });
   }
 
   /**
@@ -162,7 +171,16 @@ export class InterviewEngine {
   // ============================================================
   // Internals
   // ============================================================
-  private async askQuestion(text: string, opts?: { isClarification?: boolean }) {
+  private async askQuestion(
+    text: string,
+    opts?: {
+      isClarification?: boolean;
+      /** Si true, NO se llama a recall.playAudio (porque ya lo dijo automatic_audio_output). */
+      skipBotPlayback?: boolean;
+      /** Audio ya sintetizado a reutilizar (evita un TTS extra). */
+      preTtsAudio?: { audioBase64: string; mimeType: string; durationMs: number; bytes: number };
+    }
+  ) {
     if (this.finished) return;
     this.currentQuestion = text;
     this.emit('question_generated', {
@@ -171,7 +189,6 @@ export class InterviewEngine {
       isClarification: !!opts?.isClarification,
     });
 
-    // Crear el turno antes de la respuesta para luego mergear caption del candidato
     const turn: InterviewTurn = {
       id: uuid(),
       interviewId: this.interviewId,
@@ -183,17 +200,24 @@ export class InterviewEngine {
     };
     this.currentTurn = await this.db.createTurn(turn);
 
-    // TTS de la pregunta
-    const audio = await this.tts.synthesize(text);
-    this.emit('audio_generated', {
-      text,
-      mimeType: audio.mimeType,
-      durationMs: audio.durationMs,
-      bytes: audio.bytes,
-    });
+    let audio = opts?.preTtsAudio;
+    if (!audio) {
+      try {
+        audio = await this.tts.synthesize(text);
+      } catch (err) {
+        logger.warn({ err }, 'TTS falló para este turno; sigo sin audio');
+      }
+    }
+    if (audio) {
+      this.emit('audio_generated', {
+        text,
+        mimeType: audio.mimeType,
+        durationMs: audio.durationMs,
+        bytes: audio.bytes,
+      });
+    }
 
-    // El bot reproduce el audio en la reunión.
-    if (this.botId) {
+    if (this.botId && !opts?.skipBotPlayback && audio) {
       await this.recall.playAudio({
         interviewId: this.interviewId,
         botId: this.botId,

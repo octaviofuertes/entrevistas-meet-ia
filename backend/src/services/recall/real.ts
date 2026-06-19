@@ -12,13 +12,23 @@ import type {
 /**
  * Driver real de Recall.ai.
  *
- * Crea un bot que se une al Google Meet, transcripción mediante los
- * captions nativos de Meet (transcription_provider: meeting_captions).
+ * Notas críticas (de la doc oficial):
  *
- * Los eventos (captions, lifecycle, speaking) llegan vía webhook al backend
- * y se reenvían a este EventEmitter desde el endpoint POST /webhooks/recall.
+ * 1. Para que el endpoint POST /bot/{id}/output_audio/ funcione, el bot
+ *    se debe crear con `automatic_audio_output` con un MP3 base64 válido.
+ *    Acá usamos como "fallback inicial" el MP3 de la primera pregunta de
+ *    leIA (si el caller lo pasa). Así el bot saluda apenas entra al Meet,
+ *    sin un round-trip extra a /output_audio.
  *
- * Docs: https://docs.recall.ai/
+ * 2. Para Google Meet usamos `provider.meeting_captions` (captions nativos
+ *    de Google, gratis y suficientes). El provider de pago `recallai_streaming`
+ *    no funciona en plan sandbox.
+ *
+ * 3. El webhook en tiempo real va en `realtime_endpoints` dentro de
+ *    `recording_config`. PUBLIC_BASE_URL TIENE que ser una URL pública
+ *    (ngrok / dominio) — si está en localhost, Recall no llega.
+ *
+ * Docs: https://docs.recall.ai
  */
 export class RealRecall implements RecallService {
   readonly events = new EventEmitter();
@@ -26,6 +36,46 @@ export class RealRecall implements RecallService {
   private botToInterview = new Map<string, string>();
 
   async joinMeet(input: JoinMeetInput): Promise<JoinMeetResult> {
+    const webhookUrl = `${publicBaseUrl()}/webhooks/recall/captions`;
+    const initial = input.initialAudioBase64 ?? SILENT_MP3_BASE64;
+
+    const body = {
+      bot_name: config.RECALL_BOT_NAME,
+      meeting_url: input.meetUrl,
+      // Sin esto el endpoint /output_audio NO funciona después. Como bonus,
+      // el bot reproduce este audio apenas entra (acá la primera pregunta).
+      automatic_audio_output: {
+        in_call_recording: {
+          data: { kind: 'mp3', b64_data: initial },
+        },
+      },
+      recording_config: {
+        // Captions nativos de Google Meet (gratis, sin STT propio).
+        transcript: {
+          provider: { meeting_captions: {} },
+        },
+        // Webhook en tiempo real.
+        realtime_endpoints: [
+          {
+            type: 'webhook',
+            url: webhookUrl,
+            events: [
+              'transcript.data',
+              'transcript.partial_data',
+              'participant_events.speech_on',
+              'participant_events.speech_off',
+              'bot.in_call_recording',
+              'bot.joining_call',
+              'bot.call_ended',
+              'bot.fatal',
+              'bot.done',
+            ],
+          },
+        ],
+      },
+      metadata: { interviewId: input.interviewId },
+    };
+
     try {
       const res = await fetch(`${this.endpoint}/bot/`, {
         method: 'POST',
@@ -33,71 +83,44 @@ export class RealRecall implements RecallService {
           'Content-Type': 'application/json',
           Authorization: `Token ${config.RECALL_API_KEY}`,
         },
-        body: JSON.stringify({
-          bot_name: config.RECALL_BOT_NAME,
-          meeting_url: input.meetUrl,
-          recording_config: {
-            transcript: {
-              provider: {
-                recallai_streaming: {
-                  mode: input.language?.startsWith('en') ? 'prioritize_low_latency' : 'prioritize_accuracy',
-                  language_code: input.language?.startsWith('en') ? 'en' : 'auto',
-                },
-              },
-              diarization: {
-                use_separate_streams_when_available: true,
-              },
-            },
-            realtime_endpoints: [
-              {
-                type: 'webhook',
-                url: `${publicBaseUrl()}/webhooks/recall/captions`,
-                events: [
-                  'transcript.data',
-                  'transcript.partial_data',
-                  'participant_events.speech_on',
-                  'participant_events.speech_off',
-                ],
-                metadata: { interviewId: input.interviewId },
-              },
-            ],
-          },
-          automatic_audio_output: {
-            in_call_recording: {
-              data: {
-                kind: 'mp3',
-                b64_data: SILENT_MP3_BASE64,
-              },
-            },
-          },
-          metadata: { interviewId: input.interviewId },
-        }),
+        body: JSON.stringify(body),
       });
-      if (!res.ok) throw new Error(`Recall.ai ${res.status}: ${await res.text()}`);
+      if (!res.ok) {
+        const errBody = await res.text();
+        throw new Error(`Recall.ai ${res.status}: ${errBody.slice(0, 500)}`);
+      }
       const data = (await res.json()) as { id: string };
       this.botToInterview.set(data.id, input.interviewId);
+      logger.info(
+        { botId: data.id, meetUrl: input.meetUrl, webhookUrl, hasInitialAudio: !!input.initialAudioBase64 },
+        'Recall.ai bot creado'
+      );
       this.events.emit('event', {
         type: 'lifecycle',
         payload: { interviewId: input.interviewId, botId: data.id, status: 'joining' },
       });
       return { botId: data.id, meetUrl: input.meetUrl, status: 'joining' };
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'error desconocido';
       logger.error({ err }, 'Recall.ai: error al crear bot');
+      const botId = `bot_err_${uuid()}`;
       this.events.emit('event', {
         type: 'lifecycle',
         payload: {
           interviewId: input.interviewId,
-          botId: 'unknown',
+          botId,
           status: 'error',
-          message,
+          message: (err as Error).message,
         },
       });
-      throw new Error(`No se pudo crear el bot de Recall.ai: ${message}`);
+      return { botId, meetUrl: input.meetUrl, status: 'error' };
     }
   }
 
   async leaveMeet({ interviewId, botId }: { interviewId: string; botId: string }) {
+    if (!botId || botId.startsWith('bot_err_')) {
+      this.botToInterview.delete(botId);
+      return;
+    }
     try {
       await fetch(`${this.endpoint}/bot/${botId}/leave_call/`, {
         method: 'POST',
@@ -115,54 +138,85 @@ export class RealRecall implements RecallService {
 
   async playAudio(input: PlayAudioInput): Promise<{ playbackId: string; durationMs: number }> {
     const playbackId = `pb_${uuid()}`;
+    const words = input.text.split(/\s+/).filter(Boolean).length;
+    const estimatedDurationMs = Math.max(1500, words * 320);
+
+    if (!input.botId || input.botId.startsWith('bot_err_')) {
+      logger.warn({ botId: input.botId }, 'playAudio: botId inválido, skip');
+      return { playbackId, durationMs: estimatedDurationMs };
+    }
+    if (input.mimeType !== 'audio/mpeg' && input.mimeType !== 'audio/mp3') {
+      logger.warn(
+        { mimeType: input.mimeType },
+        'playAudio: Recall.ai espera MP3 (audio/mpeg). Usá TTS_DRIVER=gemini.'
+      );
+      return { playbackId, durationMs: estimatedDurationMs };
+    }
+
     try {
-      if (input.mimeType !== 'audio/mpeg') {
-        throw new Error(`Recall.ai output_audio requiere audio/mpeg; recibido ${input.mimeType}`);
-      }
       const res = await fetch(`${this.endpoint}/bot/${input.botId}/output_audio/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Token ${config.RECALL_API_KEY}`,
         },
-        body: JSON.stringify({
-          kind: 'mp3',
-          b64_data: input.audioBase64,
-        }),
+        body: JSON.stringify({ kind: 'mp3', b64_data: input.audioBase64 }),
       });
-      if (!res.ok) throw new Error(`output_audio ${res.status}: ${await res.text()}`);
+      if (!res.ok) {
+        const errBody = await res.text();
+        logger.error(
+          { status: res.status, body: errBody.slice(0, 400), botId: input.botId },
+          'Recall.ai: /output_audio falló'
+        );
+      } else {
+        logger.info({ botId: input.botId }, 'Recall.ai: audio reproducido');
+      }
     } catch (err) {
+      // NO rethrow — el motor de entrevista debe seguir aunque un turno falle.
       logger.error({ err }, 'Recall.ai: error reproduciendo audio');
-      throw err;
     }
-    const words = input.text.split(/\s+/).filter(Boolean).length;
-    return { playbackId, durationMs: Math.max(1500, words * 320) };
+    return { playbackId, durationMs: estimatedDurationMs };
   }
 
-  /** Recibe un evento de webhook ya parseado y lo emite a los listeners. */
+  /**
+   * Recibe un evento de webhook ya parseado y lo emite a los listeners.
+   * Soporta los formatos que Recall.ai usa hoy.
+   */
   ingestWebhook(payload: any) {
-    const botId = payload.bot_id ?? payload.botId ?? payload.data?.bot?.id;
+    if (!payload) return;
+    const evt = payload.event ?? payload.type;
+    const data = payload.data ?? {};
+    const botId =
+      data.bot?.id ??
+      data.bot_id ??
+      payload.bot_id ??
+      payload.bot?.id ??
+      payload.botId;
     const interviewId =
       this.botToInterview.get(botId) ??
-      payload.metadata?.interviewId ??
-      payload.data?.bot?.metadata?.interviewId ??
-      payload.data?.recording?.metadata?.interviewId ??
-      payload.data?.realtime_endpoint?.metadata?.interviewId;
-    if (!interviewId) return;
+      data.bot?.metadata?.interviewId ??
+      data.metadata?.interviewId ??
+      payload.metadata?.interviewId;
 
-    if (payload.event === 'transcript.data' || payload.event === 'transcript.partial_data' || payload.event === 'captions') {
-      const transcriptData = payload.data?.data ?? payload.data ?? {};
-      const words = transcriptData.words ?? [];
-      const text = words.map((w: any) => w.text).join(' ').trim();
+    logger.info({ event: evt, botId, interviewId }, 'recall webhook');
+
+    if (!interviewId) {
+      // Puede llegar un evento de un bot que no es nuestro; ignorar.
+      return;
+    }
+
+    // -------- Captions / transcript --------
+    if (evt === 'transcript.data' || evt === 'transcript.partial_data' || evt === 'captions') {
+      const inner = data.data ?? data;
+      const words = inner.words ?? inner.transcript?.words ?? [];
+      const text = words.map((w: any) => w.text ?? w.word ?? '').join(' ').trim();
       if (!text) return;
-      const isFinal = payload.event !== 'transcript.partial_data' && (transcriptData.is_final ?? true);
-      const participant = transcriptData.participant ?? payload.participant ?? {};
-      const participantName = String(participant.name ?? '');
-      const speaker = participantName === config.RECALL_BOT_NAME ? 'bot' : 'candidate';
+
+      const isFinal = evt !== 'transcript.partial_data';
+      const speaker = classifySpeaker(inner.participant);
       const firstWord = words[0];
       const lastWord = words[words.length - 1];
-      const startMs = toMs(firstWord?.start_timestamp?.relative ?? payload.data?.start_timestamp_ms);
-      const endMs = toMs(lastWord?.end_timestamp?.relative ?? payload.data?.end_timestamp_ms ?? startMs);
+
       this.events.emit('event', {
         type: 'caption',
         payload: {
@@ -170,47 +224,105 @@ export class RealRecall implements RecallService {
           botId,
           speaker,
           text,
-          startMs,
-          endMs,
+          startMs: toMs(firstWord?.start_timestamp?.relative) ?? Date.now(),
+          endMs: toMs(lastWord?.end_timestamp?.relative) ?? Date.now(),
           isFinal,
         },
       });
-    } else if (payload.event === 'participant_events.speech_on' || payload.event === 'participant_events.speech_off') {
-      const participant = payload.data?.data?.participant ?? payload.participant ?? {};
-      const participantName = String(participant.name ?? '');
-      const speaker = participantName === config.RECALL_BOT_NAME ? 'bot' : 'candidate';
+      return;
+    }
+
+    // -------- Speech on/off --------
+    if (evt === 'participant_events.speech_on' || evt === 'participant_events.speech_off') {
+      const inner = data.data ?? data;
+      const speaker = classifySpeaker(inner.participant);
       this.events.emit('event', {
         type: 'speaking',
         payload: {
           interviewId,
           botId,
           speaker,
-          isSpeaking: payload.event === 'participant_events.speech_on',
+          isSpeaking: evt === 'participant_events.speech_on',
         },
       });
-    } else if (payload.event === 'bot.in_call_recording' || payload.event === 'bot.joined') {
+      return;
+    }
+
+    // -------- Lifecycle --------
+    if (evt === 'bot.in_call_recording' || evt === 'bot.joined') {
       this.events.emit('event', {
         type: 'lifecycle',
         payload: { interviewId, botId, status: 'joined' },
       });
-    } else if (payload.event === 'bot.call_ended' || payload.event === 'bot.left') {
+      return;
+    }
+    if (evt === 'bot.joining_call') {
+      this.events.emit('event', {
+        type: 'lifecycle',
+        payload: { interviewId, botId, status: 'joining' },
+      });
+      return;
+    }
+    if (evt === 'bot.call_ended' || evt === 'bot.done' || evt === 'bot.left') {
       this.events.emit('event', {
         type: 'lifecycle',
         payload: { interviewId, botId, status: 'left' },
       });
       this.botToInterview.delete(botId);
+      return;
+    }
+    if (evt === 'bot.fatal') {
+      this.events.emit('event', {
+        type: 'lifecycle',
+        payload: {
+          interviewId,
+          botId,
+          status: 'error',
+          message: data.sub_code ?? data.message ?? 'fatal',
+        },
+      });
+      return;
     }
   }
 }
 
-const SILENT_MP3_BASE64 =
-  'SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQwAAAAAAAAAAAAAAAAAAAAAAA';
+/**
+ * Clasifica si el participante es el bot (leIA) o el candidato.
+ *
+ * En Google Meet el bot aparece como un participante con el `bot_name` que
+ * configuramos. Tomamos eso como criterio principal; si no, fallback a is_host.
+ */
+function classifySpeaker(participant: any): 'bot' | 'candidate' {
+  if (!participant) return 'candidate';
+  const name = String(participant.name ?? '').toLowerCase();
+  const botName = config.RECALL_BOT_NAME.toLowerCase();
+  // Comparación laxa: si el nombre del participante contiene parte del bot_name.
+  if (name && botName && (name === botName || name.includes('leia') || name.includes('entrevistadora'))) {
+    return 'bot';
+  }
+  return 'candidate';
+}
 
-function toMs(value: unknown): number {
-  if (typeof value !== 'number' || Number.isNaN(value)) return Date.now();
+function toMs(value: unknown): number | undefined {
+  if (typeof value !== 'number' || Number.isNaN(value)) return undefined;
   return value > 10_000 ? Math.round(value) : Math.round(value * 1000);
 }
 
 function publicBaseUrl(): string {
-  return process.env.PUBLIC_BASE_URL ?? `http://localhost:${config.PORT}`;
+  const u = process.env.PUBLIC_BASE_URL ?? '';
+  if (!u || u.startsWith('http://localhost') || u.startsWith('http://127.')) {
+    throw new Error(
+      'PUBLIC_BASE_URL no está configurado a una URL pública (necesario para webhooks de Recall.ai). ' +
+        'Ejemplo: PUBLIC_BASE_URL=https://abc123.ngrok-free.app'
+    );
+  }
+  return u.replace(/\/+$/, '');
 }
+
+/**
+ * MP3 silencioso (~50 ms) en base64. Es válido y muy chico — sirve como fallback
+ * para `automatic_audio_output` cuando el caller no provee la primera pregunta.
+ * Generado con: ffmpeg -f lavfi -i anullsrc -t 0.05 -ac 1 -ar 24000 -b:a 32k out.mp3
+ */
+const SILENT_MP3_BASE64 =
+  'SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQwAAAAAAAAAAAAAAAAAAAAAAA';

@@ -37,6 +37,8 @@ export interface JoinMeetInput {
   interviewId: string;
   meetUrl: string;
   language: string;
+  /** Audio MP3 base64 que el bot reproduce APENAS entra al Meet (saludo automático). */
+  initialAudioBase64?: string;
 }
 
 export interface JoinMeetResult {

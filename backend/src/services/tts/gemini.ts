@@ -2,7 +2,16 @@ import { config } from '../../config';
 import { logger } from '../../logger';
 import type { TTSService, TTSResult } from './index';
 import { MockTTS } from './mock';
-import { Mp3Encoder } from 'lamejs';
+// lamejs es ESM puro, lo cargamos dinámicamente para evitar problemas con tsx/CJS.
+let mp3EncoderCtor: any = null;
+async function getMp3Encoder() {
+  if (!mp3EncoderCtor) {
+    const mod: any = await import('@breezystack/lamejs');
+    mp3EncoderCtor = mod.Mp3Encoder ?? mod.default?.Mp3Encoder;
+    if (!mp3EncoderCtor) throw new Error('No se pudo cargar Mp3Encoder de lamejs');
+  }
+  return mp3EncoderCtor;
+}
 
 /**
  * Driver TTS usando la voz nativa de Gemini.
@@ -11,9 +20,11 @@ import { Mp3Encoder } from 'lamejs';
  * Voces (prebuilt): Kore, Aoede, Puck, Charon, Fenrir, Leda, Orus, Zephyr, etc.
  *
  * Endpoint: POST /v1beta/models/{model}:generateContent
- * Devuelve PCM raw 16-bit LE 24kHz mono → lo envolvemos en WAV (44 bytes de header).
+ * Gemini devuelve PCM raw 16-bit LE 24kHz mono. Lo codificamos a MP3 con lamejs
+ * porque Recall.ai espera MP3 base64 en /output_audio. El browser también lo
+ * reproduce sin drama.
  *
- * Si la API falla (rate limit, etc.), cae al MockTTS para no romper la entrevista.
+ * Si la API falla cae al MockTTS para no romper la entrevista.
  */
 export class GeminiTTS implements TTSService {
   private fallback = new MockTTS();
@@ -64,14 +75,12 @@ export class GeminiTTS implements TTSService {
 
       const rate = parseRateFromMime(sourceMime) ?? 24000;
       const pcm = Buffer.from(pcmBase64, 'base64');
-      const mp3 = encodePcmMonoToMp3(pcm, rate);
-      const audioBase64 = mp3.toString('base64');
+      const mp3 = await pcmToMp3(pcm, rate);
 
-      // Duración real desde el tamaño del PCM (16-bit mono).
       const durationMs = Math.round((pcm.length / 2 / rate) * 1000);
 
       return {
-        audioBase64,
+        audioBase64: mp3.toString('base64'),
         mimeType: 'audio/mpeg',
         durationMs: Math.max(800, durationMs),
         bytes: mp3.length,
@@ -84,33 +93,33 @@ export class GeminiTTS implements TTSService {
 }
 
 function parseRateFromMime(mime: string): number | undefined {
-  // Ej: "audio/L16;codec=pcm;rate=24000"
   const m = mime.match(/rate=(\d+)/i);
   if (m) return parseInt(m[1], 10);
 }
 
 /**
- * Envuelve PCM raw (16-bit LE, mono) en un WAV mínimo con header RIFF de 44 bytes.
- * Recall.ai, Chrome, ffmpeg y los players nativos lo aceptan sin problema.
+ * PCM 16-bit LE mono → MP3 (libreria lamejs, sin binarios externos).
+ * 24kHz mono a 96 kbps queda con buena calidad para voz.
  */
-function encodePcmMonoToMp3(pcm: Buffer, sampleRate: number): Buffer {
-  const samples = new Int16Array(Math.floor(pcm.length / 2));
-  for (let i = 0; i < samples.length; i++) {
-    samples[i] = pcm.readInt16LE(i * 2);
+async function pcmToMp3(pcm: Buffer, sampleRate: number): Promise<Buffer> {
+  const Encoder = await getMp3Encoder();
+  const samples = new Int16Array(pcm.buffer, pcm.byteOffset, pcm.length / 2);
+  const encoder = new Encoder(1, sampleRate, 96);
+  const chunkSize = 1152;
+  const mp3Data: Uint8Array[] = [];
+  for (let i = 0; i < samples.length; i += chunkSize) {
+    const chunk = samples.subarray(i, i + chunkSize);
+    const encoded = encoder.encodeBuffer(chunk);
+    if (encoded.length > 0) mp3Data.push(encoded);
   }
-
-  const encoder = new Mp3Encoder(1, sampleRate, 64);
-  const chunks: Buffer[] = [];
-  const frameSize = 1152;
-
-  for (let i = 0; i < samples.length; i += frameSize) {
-    const frame = samples.subarray(i, i + frameSize);
-    const encoded = encoder.encodeBuffer(frame);
-    if (encoded.length > 0) chunks.push(Buffer.from(encoded));
-  }
-
   const flushed = encoder.flush();
-  if (flushed.length > 0) chunks.push(Buffer.from(flushed));
-
-  return Buffer.concat(chunks);
+  if (flushed.length > 0) mp3Data.push(flushed);
+  const total = mp3Data.reduce((a, b) => a + b.length, 0);
+  const out = Buffer.alloc(total);
+  let offset = 0;
+  for (const part of mp3Data) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
 }
