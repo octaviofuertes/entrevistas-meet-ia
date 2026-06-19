@@ -36,12 +36,39 @@ export class RealRecall implements RecallService {
         body: JSON.stringify({
           bot_name: config.RECALL_BOT_NAME,
           meeting_url: input.meetUrl,
-          transcription_options: {
-            provider: 'meeting_captions',
+          recording_config: {
+            transcript: {
+              provider: {
+                recallai_streaming: {
+                  mode: input.language?.startsWith('en') ? 'prioritize_low_latency' : 'prioritize_accuracy',
+                  language_code: input.language?.startsWith('en') ? 'en' : 'auto',
+                },
+              },
+              diarization: {
+                use_separate_streams_when_available: true,
+              },
+            },
+            realtime_endpoints: [
+              {
+                type: 'webhook',
+                url: `${publicBaseUrl()}/webhooks/recall/captions`,
+                events: [
+                  'transcript.data',
+                  'transcript.partial_data',
+                  'participant_events.speech_on',
+                  'participant_events.speech_off',
+                ],
+                metadata: { interviewId: input.interviewId },
+              },
+            ],
           },
-          real_time_transcription: {
-            destination_url: `${publicBaseUrl()}/webhooks/recall/captions`,
-            partial_results: false,
+          automatic_audio_output: {
+            in_call_recording: {
+              data: {
+                kind: 'mp3',
+                b64_data: SILENT_MP3_BASE64,
+              },
+            },
           },
           metadata: { interviewId: input.interviewId },
         }),
@@ -55,25 +82,24 @@ export class RealRecall implements RecallService {
       });
       return { botId: data.id, meetUrl: input.meetUrl, status: 'joining' };
     } catch (err) {
+      const message = err instanceof Error ? err.message : 'error desconocido';
       logger.error({ err }, 'Recall.ai: error al crear bot');
-      // Fallback: devolver "error" sin romper la entrevista
-      const botId = `bot_err_${uuid()}`;
       this.events.emit('event', {
         type: 'lifecycle',
         payload: {
           interviewId: input.interviewId,
-          botId,
+          botId: 'unknown',
           status: 'error',
-          message: (err as Error).message,
+          message,
         },
       });
-      return { botId, meetUrl: input.meetUrl, status: 'error' };
+      throw new Error(`No se pudo crear el bot de Recall.ai: ${message}`);
     }
   }
 
   async leaveMeet({ interviewId, botId }: { interviewId: string; botId: string }) {
     try {
-      await fetch(`${this.endpoint}/bot/${botId}/leave_call`, {
+      await fetch(`${this.endpoint}/bot/${botId}/leave_call/`, {
         method: 'POST',
         headers: { Authorization: `Token ${config.RECALL_API_KEY}` },
       });
@@ -90,7 +116,10 @@ export class RealRecall implements RecallService {
   async playAudio(input: PlayAudioInput): Promise<{ playbackId: string; durationMs: number }> {
     const playbackId = `pb_${uuid()}`;
     try {
-      const res = await fetch(`${this.endpoint}/bot/${input.botId}/output_audio`, {
+      if (input.mimeType !== 'audio/mpeg') {
+        throw new Error(`Recall.ai output_audio requiere audio/mpeg; recibido ${input.mimeType}`);
+      }
+      const res = await fetch(`${this.endpoint}/bot/${input.botId}/output_audio/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -104,6 +133,7 @@ export class RealRecall implements RecallService {
       if (!res.ok) throw new Error(`output_audio ${res.status}: ${await res.text()}`);
     } catch (err) {
       logger.error({ err }, 'Recall.ai: error reproduciendo audio');
+      throw err;
     }
     const words = input.text.split(/\s+/).filter(Boolean).length;
     return { playbackId, durationMs: Math.max(1500, words * 320) };
@@ -111,15 +141,28 @@ export class RealRecall implements RecallService {
 
   /** Recibe un evento de webhook ya parseado y lo emite a los listeners. */
   ingestWebhook(payload: any) {
-    const botId = payload.bot_id ?? payload.botId;
-    const interviewId = this.botToInterview.get(botId) ?? payload.metadata?.interviewId;
+    const botId = payload.bot_id ?? payload.botId ?? payload.data?.bot?.id;
+    const interviewId =
+      this.botToInterview.get(botId) ??
+      payload.metadata?.interviewId ??
+      payload.data?.bot?.metadata?.interviewId ??
+      payload.data?.recording?.metadata?.interviewId ??
+      payload.data?.realtime_endpoint?.metadata?.interviewId;
     if (!interviewId) return;
 
-    if (payload.event === 'transcript.data' || payload.event === 'captions') {
-      const words = payload.data?.words ?? [];
+    if (payload.event === 'transcript.data' || payload.event === 'transcript.partial_data' || payload.event === 'captions') {
+      const transcriptData = payload.data?.data ?? payload.data ?? {};
+      const words = transcriptData.words ?? [];
       const text = words.map((w: any) => w.text).join(' ').trim();
-      const isFinal = payload.data?.is_final ?? true;
-      const speaker = (payload.participant?.is_host ? 'bot' : 'candidate') as 'bot' | 'candidate';
+      if (!text) return;
+      const isFinal = payload.event !== 'transcript.partial_data' && (transcriptData.is_final ?? true);
+      const participant = transcriptData.participant ?? payload.participant ?? {};
+      const participantName = String(participant.name ?? '');
+      const speaker = participantName === config.RECALL_BOT_NAME ? 'bot' : 'candidate';
+      const firstWord = words[0];
+      const lastWord = words[words.length - 1];
+      const startMs = toMs(firstWord?.start_timestamp?.relative ?? payload.data?.start_timestamp_ms);
+      const endMs = toMs(lastWord?.end_timestamp?.relative ?? payload.data?.end_timestamp_ms ?? startMs);
       this.events.emit('event', {
         type: 'caption',
         payload: {
@@ -127,9 +170,22 @@ export class RealRecall implements RecallService {
           botId,
           speaker,
           text,
-          startMs: payload.data?.start_timestamp_ms ?? Date.now(),
-          endMs: payload.data?.end_timestamp_ms ?? Date.now(),
+          startMs,
+          endMs,
           isFinal,
+        },
+      });
+    } else if (payload.event === 'participant_events.speech_on' || payload.event === 'participant_events.speech_off') {
+      const participant = payload.data?.data?.participant ?? payload.participant ?? {};
+      const participantName = String(participant.name ?? '');
+      const speaker = participantName === config.RECALL_BOT_NAME ? 'bot' : 'candidate';
+      this.events.emit('event', {
+        type: 'speaking',
+        payload: {
+          interviewId,
+          botId,
+          speaker,
+          isSpeaking: payload.event === 'participant_events.speech_on',
         },
       });
     } else if (payload.event === 'bot.in_call_recording' || payload.event === 'bot.joined') {
@@ -145,6 +201,14 @@ export class RealRecall implements RecallService {
       this.botToInterview.delete(botId);
     }
   }
+}
+
+const SILENT_MP3_BASE64 =
+  'SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQwAAAAAAAAAAAAAAAAAAAAAAA';
+
+function toMs(value: unknown): number {
+  if (typeof value !== 'number' || Number.isNaN(value)) return Date.now();
+  return value > 10_000 ? Math.round(value) : Math.round(value * 1000);
 }
 
 function publicBaseUrl(): string {

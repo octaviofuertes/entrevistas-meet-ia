@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Layout } from '@/components/Layout';
 import { StatusBadge } from '@/components/StatusBadge';
-import { apiGetInterview, apiFinalizeInterview } from '@/lib/api';
+import { apiGetInterview, apiFinalizeInterview, apiStartInterview } from '@/lib/api';
 import { DIMENSION_LABELS } from '@/lib/types';
 import type { InterviewDetail } from '@/lib/types';
 
@@ -31,10 +31,15 @@ export default function EntrevistaDetallePage() {
     load();
   }, [params.id]);
 
-  function onStart() {
-    // Llevamos al usuario a la sala. El start real se dispara desde ahí,
-    // así el WS ya está conectado y no se pierden eventos.
-    router.push(`/entrevista-en-vivo/${params.id}`);
+  async function onStart() {
+    if (!data?.meetUrl) return alert('No hay link de Meet configurado');
+    try {
+      await apiStartInterview(params.id);
+      window.open(data.meetUrl, '_blank');
+      load();
+    } catch (e: any) {
+      alert(e.message);
+    }
   }
 
   async function onFinalize() {
@@ -75,7 +80,7 @@ export default function EntrevistaDetallePage() {
               <button onClick={onStart} className="btn-primary">▶ Iniciar entrevista</button>
             )}
             {data.status === 'en_curso' && (
-              <Link href={liveUrl} className="btn-secondary">Sala en vivo</Link>
+              <Link href={liveUrl} className="btn-secondary">Panel de monitoreo</Link>
             )}
             {data.status === 'en_curso' && (
               <button onClick={onFinalize} className="btn-secondary">Finalizar</button>
@@ -201,11 +206,11 @@ export default function EntrevistaDetallePage() {
 
           {(data.status === 'agendada' || data.status === 'en_curso') && (
             <div className="card bg-primary-50 border-primary-200">
-              <h3 className="font-semibold mb-2">Sala en vivo</h3>
+              <h3 className="font-semibold mb-2">Panel de monitoreo</h3>
               <p className="text-xs text-slate-600 mb-3">
                 Acceso interno para monitorear la entrevista en tiempo real.
               </p>
-              <Link href={liveUrl} className="btn-primary w-full justify-center">Abrir sala</Link>
+              <Link href={liveUrl} className="btn-primary w-full justify-center">Abrir panel</Link>
             </div>
           )}
         </aside>

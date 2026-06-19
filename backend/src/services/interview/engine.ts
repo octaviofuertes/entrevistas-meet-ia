@@ -79,14 +79,29 @@ export class InterviewEngine {
     this.boundRecallHandler = (evt: any) => this.handleRecallEvent(evt);
     this.recall.events.on('event', this.boundRecallHandler);
 
-    // Bot entra a Meet
-    const joinRes = await this.recall.joinMeet({
-      interviewId: iv.id,
-      meetUrl: iv.meetUrl,
-      language: this.job.requirements.language,
-    });
-    this.botId = joinRes.botId;
-    await this.db.updateInterview(iv.id, { recallBotId: joinRes.botId });
+    // Bot entra a Meet. Si Recall.ai rechaza la creación, no dejamos la
+    // entrevista marcada como en curso porque en la práctica no empezó.
+    try {
+      const joinRes = await this.recall.joinMeet({
+        interviewId: iv.id,
+        meetUrl: iv.meetUrl,
+        language: this.job.requirements.language,
+      });
+      if (joinRes.status === 'error') {
+        throw new Error('Recall.ai no pudo crear el bot');
+      }
+      this.botId = joinRes.botId;
+      await this.db.updateInterview(iv.id, { recallBotId: joinRes.botId });
+    } catch (err) {
+      this.recall.events.off('event', this.boundRecallHandler);
+      await this.db.updateInterview(iv.id, {
+        status: 'agendada',
+        startedAt: null,
+        recallBotId: null,
+      });
+      this.emit('interview_status', { status: 'agendada' });
+      throw err;
+    }
 
     // Primera pregunta + muletillas en paralelo (las muletillas no bloquean).
     const introPromise = this.leia.firstQuestion({

@@ -83,6 +83,12 @@ async function start() {
     if (isDemoMode()) {
       logger.info('MODO DEMO activo: leIA, Recall.ai y ElevenLabs en mock.');
     }
+    // Validación crítica para Recall.ai
+    if (config.RECALL_DRIVER === 'recall' && !process.env.PUBLIC_BASE_URL) {
+      logger.warn('⚠️  RECALL_DRIVER=recall pero PUBLIC_BASE_URL no está configurado.');
+      logger.warn('⚠️  Recall.ai NO podrá enviar webhooks a localhost.');
+      logger.warn('⚠️  Ejecutá: npx tsx scripts/start-ngrok.ts y pegá la URL en .env');
+    }
   } catch (err) {
     logger.fatal({ err }, 'Error al iniciar servidor');
     process.exit(1);

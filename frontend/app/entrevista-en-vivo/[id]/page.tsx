@@ -366,6 +366,7 @@ export default function EntrevistaEnVivoPage() {
     setStarting(true);
     try {
       await apiStartInterview(id);
+      if (meta?.meetUrl) window.open(meta.meetUrl, '_blank');
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -427,7 +428,7 @@ export default function EntrevistaEnVivoPage() {
             href={`/entrevistas/${id}`}
             className="text-xs text-slate-300 hover:text-white"
           >
-            ← Salir
+            ← Volver
           </Link>
           <div className="leading-tight">
             <div className="text-sm font-semibold">

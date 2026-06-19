@@ -104,7 +104,7 @@ export const apiGetInterview = (id: string) =>
 export const apiCreateInterview = (data: {
   jobId: string;
   candidateId: string;
-  meetUrl?: string;
+  meetUrl: string;
   scheduledAt?: string;
 }) =>
   http<Interview>('/api/interviews', {

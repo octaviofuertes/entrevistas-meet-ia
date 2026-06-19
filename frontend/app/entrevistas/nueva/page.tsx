@@ -17,6 +17,7 @@ export default function NuevaEntrevistaPage() {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [jobId, setJobId] = useState<string>('');
   const [candidateId, setCandidateId] = useState<string>('');
+  const [meetUrl, setMeetUrl] = useState<string>('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -40,9 +41,11 @@ export default function NuevaEntrevistaPage() {
     setError(null);
     if (!jobId) return setError('Elegí un puesto');
     if (!candidateId) return setError('Elegí un candidato');
+    if (!meetUrl.startsWith('https://meet.google.com/')) return setError('Ingresá un enlace válido de Google Meet (https://meet.google.com/...)');
+    
     setSubmitting(true);
     try {
-      const interview = await apiCreateInterview({ jobId, candidateId });
+      const interview = await apiCreateInterview({ jobId, candidateId, meetUrl });
       router.push(`/entrevistas/${interview.id}`);
     } catch (e: any) {
       setError(e.message);
@@ -123,6 +126,21 @@ export default function NuevaEntrevistaPage() {
           {selectedCandidate && (
             <p className="mt-2 text-xs text-slate-500">{selectedCandidate.notes ?? ''}</p>
           )}
+        </div>
+
+        <div className="card">
+          <h2 className="text-lg font-semibold mb-3">Enlace de Google Meet</h2>
+          <p className="text-sm text-slate-500 mb-2">
+            Pegá aquí el link de la reunión de Meet donde se unirá leIA.
+          </p>
+          <input
+            type="url"
+            className="input w-full"
+            placeholder="https://meet.google.com/abc-defg-hij"
+            value={meetUrl}
+            onChange={(e) => setMeetUrl(e.target.value)}
+            required
+          />
         </div>
 
         <div className="flex items-center gap-3">

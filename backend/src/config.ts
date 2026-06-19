@@ -38,8 +38,8 @@ const ConfigSchema = z.object({
   ELEVENLABS_VOICE_ID: z.string().default('21m00Tcm4TlvDq8ikWAM'),
   ELEVENLABS_MODEL: z.string().default('eleven_multilingual_v2'),
   // Gemini TTS reusa GEMINI_API_KEY. Modelo y voz se pueden override por env.
-  GEMINI_TTS_MODEL: z.string().default('gemini-2.5-flash-preview-tts'),
-  GEMINI_TTS_VOICE: z.string().default('Kore'),
+  GEMINI_TTS_MODEL: z.string().default('gemini-2.5-flash'),
+  GEMINI_TTS_VOICE: z.string().default('Puck'),
 
   // Idioma por defecto de la entrevista (afecta voces y prompts).
   INTERVIEW_LANGUAGE: z.string().default('es'),

@@ -8,7 +8,7 @@ import type { Interview } from '../types';
 const CreateInterviewSchema = z.object({
   jobId: z.string().uuid(),
   candidateId: z.string().uuid(),
-  meetUrl: z.string().url().optional(),
+  meetUrl: z.string().url(),
   scheduledAt: z.string().datetime().optional(),
 });
 
@@ -67,7 +67,7 @@ export async function interviewsRoutes(app: FastifyInstance) {
       jobId: parsed.data.jobId,
       candidateId: parsed.data.candidateId,
       status: 'agendada',
-      meetUrl: parsed.data.meetUrl ?? generateMeetUrl(),
+      meetUrl: parsed.data.meetUrl,
       recallBotId: null,
       scheduledAt: parsed.data.scheduledAt ?? now,
       createdAt: now,

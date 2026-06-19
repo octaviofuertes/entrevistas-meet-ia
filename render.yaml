@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: entrevistas-meet-backend
+    env: node
+    buildCommand: cd backend && npm install && npm run build
+    startCommand: cd backend && npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_DRIVER
+        value: postgres
+      - key: DATABASE_URL
+        sync: false
+      - key: RECALL_DRIVER
+        value: recall
+      - key: RECALL_API_KEY
+        sync: false
+      - key: TTS_DRIVER
+        value: gemini
+      - key: GEMINI_TTS_MODEL
+        value: gemini-2.5-flash
+      - key: GEMINI_TTS_VOICE
+        value: Puck
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: CORS_ORIGIN
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
