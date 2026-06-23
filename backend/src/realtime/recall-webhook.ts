@@ -12,6 +12,10 @@ import { RealRecall } from '../services/recall/real';
  * InterviewEngine los procese exactamente igual que los del mock.
  */
 export async function recallWebhookRoute(app: FastifyInstance) {
+  app.get('/webhooks/recall/ping', async (_req, reply) => {
+    return reply.send({ ok: true, ts: Date.now() });
+  });
+
   app.post('/webhooks/recall/captions', async (req, reply) => {
     if (config.RECALL_DRIVER !== 'recall') {
       return reply.code(200).send({ ok: true, ignored: 'mock_driver' });

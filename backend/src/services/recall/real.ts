@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import { v4 as uuid } from 'uuid';
 import { config } from '../../config';
 import { logger } from '../../logger';
+import { botStageBus } from '../../realtime/bot-stage';
 import type {
   RecallService,
   JoinMeetInput,
@@ -20,9 +21,8 @@ import type {
  *    leIA (si el caller lo pasa). Así el bot saluda apenas entra al Meet,
  *    sin un round-trip extra a /output_audio.
  *
- * 2. Para Google Meet usamos `provider.meeting_captions` (captions nativos
- *    de Google, gratis y suficientes). El provider de pago `recallai_streaming`
- *    no funciona en plan sandbox.
+ * 2. Usamos `recallai_streaming` como provider de transcripción — transcribe
+ *    el audio directamente sin necesitar que se activen los subtítulos de Meet.
  *
  * 3. El webhook en tiempo real va en `realtime_endpoints` dentro de
  *    `recording_config`. PUBLIC_BASE_URL TIENE que ser una URL pública
@@ -36,25 +36,27 @@ export class RealRecall implements RecallService {
   private botToInterview = new Map<string, string>();
 
   async joinMeet(input: JoinMeetInput): Promise<JoinMeetResult> {
-    const webhookUrl = `${publicBaseUrl()}/webhooks/recall/captions`;
-    const initial = input.initialAudioBase64 ?? SILENT_MP3_BASE64;
+    const base = publicBaseUrl();
+    const webhookUrl = `${base}/webhooks/recall/captions`;
+    const stageUrl = `${base}/bot-stage/${input.interviewId}`;
 
     const body = {
       bot_name: config.RECALL_BOT_NAME,
       meeting_url: input.meetUrl,
-      // Sin esto el endpoint /output_audio NO funciona después. Como bonus,
-      // el bot reproduce este audio apenas entra (acá la primera pregunta).
-      automatic_audio_output: {
-        in_call_recording: {
-          data: { kind: 'mp3', b64_data: initial },
+      // Output Media → webpage: única forma confiable de que el bot reproduzca
+      // audio interactivo (Recall documenta /output_audio como NO permitido
+      // para "dynamic transcription-based replies"). La página la armamos lo
+      // más parecida posible al avatar default de Meet (gris + círculo + L).
+      output_media: {
+        camera: {
+          kind: 'webpage',
+          config: { url: stageUrl },
         },
       },
       recording_config: {
-        // Captions nativos de Google Meet (gratis, sin STT propio).
         transcript: {
-          provider: { meeting_captions: {} },
+          provider: { recallai_streaming: {} },
         },
-        // Webhook en tiempo real.
         realtime_endpoints: [
           {
             type: 'webhook',
@@ -64,11 +66,6 @@ export class RealRecall implements RecallService {
               'transcript.partial_data',
               'participant_events.speech_on',
               'participant_events.speech_off',
-              'bot.in_call_recording',
-              'bot.joining_call',
-              'bot.call_ended',
-              'bot.fatal',
-              'bot.done',
             ],
           },
         ],
@@ -92,8 +89,8 @@ export class RealRecall implements RecallService {
       const data = (await res.json()) as { id: string };
       this.botToInterview.set(data.id, input.interviewId);
       logger.info(
-        { botId: data.id, meetUrl: input.meetUrl, webhookUrl, hasInitialAudio: !!input.initialAudioBase64 },
-        'Recall.ai bot creado'
+        { botId: data.id, meetUrl: input.meetUrl, webhookUrl, stageUrl },
+        'Recall.ai bot creado (output_media → bot-stage)'
       );
       this.events.emit('event', {
         type: 'lifecycle',
@@ -141,40 +138,17 @@ export class RealRecall implements RecallService {
     const words = input.text.split(/\s+/).filter(Boolean).length;
     const estimatedDurationMs = Math.max(1500, words * 320);
 
-    if (!input.botId || input.botId.startsWith('bot_err_')) {
-      logger.warn({ botId: input.botId }, 'playAudio: botId inválido, skip');
-      return { playbackId, durationMs: estimatedDurationMs };
-    }
-    if (input.mimeType !== 'audio/mpeg' && input.mimeType !== 'audio/mp3') {
-      logger.warn(
-        { mimeType: input.mimeType },
-        'playAudio: Recall.ai espera MP3 (audio/mpeg). Usá TTS_DRIVER=gemini.'
-      );
-      return { playbackId, durationMs: estimatedDurationMs };
-    }
-
-    try {
-      const res = await fetch(`${this.endpoint}/bot/${input.botId}/output_audio/`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Token ${config.RECALL_API_KEY}`,
-        },
-        body: JSON.stringify({ kind: 'mp3', b64_data: input.audioBase64 }),
-      });
-      if (!res.ok) {
-        const errBody = await res.text();
-        logger.error(
-          { status: res.status, body: errBody.slice(0, 400), botId: input.botId },
-          'Recall.ai: /output_audio falló'
-        );
-      } else {
-        logger.info({ botId: input.botId }, 'Recall.ai: audio reproducido');
-      }
-    } catch (err) {
-      // NO rethrow — el motor de entrevista debe seguir aunque un turno falle.
-      logger.error({ err }, 'Recall.ai: error reproduciendo audio');
-    }
+    // Audio → bot-stage por WS. El bot lo reproduce con <audio> nativo y Recall
+    // lo streamea al Meet como su voz.
+    botStageBus.send(input.interviewId, {
+      type: 'play',
+      mimeType: input.mimeType,
+      audioBase64: input.audioBase64,
+    });
+    logger.info(
+      { interviewId: input.interviewId, bytes: input.audioBase64.length, connected: botStageBus.isConnected(input.interviewId) },
+      'bot-stage: audio enviado'
+    );
     return { playbackId, durationMs: estimatedDurationMs };
   }
 
@@ -294,9 +268,10 @@ export class RealRecall implements RecallService {
  */
 function classifySpeaker(participant: any): 'bot' | 'candidate' {
   if (!participant) return 'candidate';
-  const name = String(participant.name ?? '').toLowerCase();
-  const botName = config.RECALL_BOT_NAME.toLowerCase();
-  // Comparación laxa: si el nombre del participante contiene parte del bot_name.
+  const normalize = (s: string) =>
+    s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  const name = normalize(String(participant.name ?? ''));
+  const botName = normalize(config.RECALL_BOT_NAME);
   if (name && botName && (name === botName || name.includes('leia') || name.includes('entrevistadora'))) {
     return 'bot';
   }

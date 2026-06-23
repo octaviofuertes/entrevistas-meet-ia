@@ -33,9 +33,11 @@ export default function EntrevistaDetallePage() {
 
   async function onStart() {
     if (!data?.meetUrl) return alert('No hay link de Meet configurado');
+    // Abrimos el Meet y disparamos la creación del bot en paralelo. Recall espera
+    // hasta 20 min en la waiting room, te sobra tiempo para entrar y admitir el bot.
+    window.open(data.meetUrl, '_blank');
     try {
       await apiStartInterview(params.id);
-      window.open(data.meetUrl, '_blank');
       load();
     } catch (e: any) {
       alert(e.message);
@@ -55,7 +57,6 @@ export default function EntrevistaDetallePage() {
   if (loading) return <Layout><p className="text-slate-500">Cargando...</p></Layout>;
   if (error || !data) return <Layout><p className="text-red-600">{error ?? 'No encontrada'}</p></Layout>;
 
-  const liveUrl = `/entrevista-en-vivo/${data.id}`;
   const hasR1 = data.reports.some((r) => r.kind === 1);
   const hasR2 = data.reports.some((r) => r.kind === 2);
 
@@ -80,7 +81,7 @@ export default function EntrevistaDetallePage() {
               <button onClick={onStart} className="btn-primary">▶ Iniciar entrevista</button>
             )}
             {data.status === 'en_curso' && (
-              <Link href={liveUrl} className="btn-secondary">Panel de monitoreo</Link>
+              <button onClick={load} className="btn-secondary">↻ Refrescar</button>
             )}
             {data.status === 'en_curso' && (
               <button onClick={onFinalize} className="btn-secondary">Finalizar</button>
@@ -204,13 +205,20 @@ export default function EntrevistaDetallePage() {
             )}
           </div>
 
-          {(data.status === 'agendada' || data.status === 'en_curso') && (
+          {data.status === 'en_curso' && (
             <div className="card bg-primary-50 border-primary-200">
-              <h3 className="font-semibold mb-2">Panel de monitoreo</h3>
+              <h3 className="font-semibold mb-2">Entrevista en curso</h3>
               <p className="text-xs text-slate-600 mb-3">
-                Acceso interno para monitorear la entrevista en tiempo real.
+                leIA está entrevistando al candidato en Google Meet.
               </p>
-              <Link href={liveUrl} className="btn-primary w-full justify-center">Abrir panel</Link>
+              <a
+                href={data.meetUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="btn-primary w-full justify-center"
+              >
+                Abrir Google Meet
+              </a>
             </div>
           )}
         </aside>

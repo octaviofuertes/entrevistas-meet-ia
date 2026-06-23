@@ -18,3 +18,6 @@ data/
 gcp-credentials*.json
 .idea/
 .vscode/
+
+# Tunnel binary (download locally, ~50MB)
+backend/cloudflared.exe

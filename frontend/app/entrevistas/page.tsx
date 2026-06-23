@@ -102,13 +102,15 @@ export default function EntrevistasPage() {
                       >
                         Detalle
                       </Link>
-                      {(iv.status === 'agendada' || iv.status === 'en_curso') && (
-                        <Link
-                          href={`/entrevista-en-vivo/${iv.id}`}
+                      {iv.status === 'en_curso' && iv.meetUrl && (
+                        <a
+                          href={iv.meetUrl}
+                          target="_blank"
+                          rel="noreferrer"
                           className="text-green-600 hover:underline mr-3"
                         >
-                          ▶ En vivo
-                        </Link>
+                          ▶ Meet
+                        </a>
                       )}
                       {iv.status === 'completada' && (
                         <Link

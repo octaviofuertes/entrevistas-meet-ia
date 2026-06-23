@@ -50,12 +50,19 @@ export class InterviewEngine {
   private leia = getLeia();
   private tts = getTTS();
   private boundRecallHandler: (evt: any) => void = () => {};
+  private started = false;
+  private fillerAudios: Array<{ audioBase64: string; mimeType: string }> = [];
+  private fillerPlaying = false;
+  private captionSilenceTimer: NodeJS.Timeout | null = null;
 
   constructor(private db: Database, interviewId: string) {
     this.interviewId = interviewId;
   }
 
   async start(): Promise<void> {
+    if (this.started) return;
+    this.started = true;
+
     const iv = await this.db.getInterview(this.interviewId);
     if (!iv) throw new Error('Entrevista no encontrada');
     this.interview = iv;
@@ -82,14 +89,25 @@ export class InterviewEngine {
     // 1) Generar la primera pregunta + TTS ANTES de joinMeet. Eso nos permite
     //    mandar el audio como automatic_audio_output, así el bot saluda apenas
     //    entra al Meet (sin un round-trip extra a /output_audio).
-    // 2) Muletillas en paralelo (no bloquean).
     const introPromise = this.leia.firstQuestion({
       job: this.job,
       candidateName: this.candidate.name,
     });
     this.leia
       .generateFillers({ job: this.job, candidateName: this.candidate.name })
-      .then((fillers) => this.emit('fillers_ready', { fillers }))
+      .then(async (fillers) => {
+        this.emit('fillers_ready', { fillers });
+        // Filtramos antes de TTS: nada de evaluativas, transicionales o largas
+        // (por si el modelo se zarpó a pesar del prompt).
+        const safe = fillers.filter((f) => isNeutralFiller(f)).slice(0, 12);
+        const results = await Promise.allSettled(
+          safe.map((f) => this.tts.synthesize(f))
+        );
+        this.fillerAudios = results
+          .filter((r): r is PromiseFulfilledResult<any> => r.status === 'fulfilled')
+          .map((r) => ({ audioBase64: r.value.audioBase64, mimeType: r.value.mimeType }));
+        logger.info({ requested: safe.length, ready: this.fillerAudios.length }, 'muletillas pre-sintetizadas');
+      })
       .catch(() => {});
 
     const intro = await introPromise;
@@ -97,17 +115,16 @@ export class InterviewEngine {
     try {
       introAudio = await this.tts.synthesize(intro);
     } catch (err) {
-      logger.warn({ err }, 'TTS de la primera pregunta falló; el bot entrará en silencio');
+      logger.warn({ err }, 'TTS de la primera pregunta falló; el bot va a entrar mudo');
     }
 
-    // 3) Crear el bot. Pasamos el audio de la primera pregunta como
-    //    automatic_audio_output → el bot lo reproduce apenas entra.
+    // 2) Crear el bot. Recall levanta un Chrome y carga el bot-stage. Todo el
+    //    audio (saludo + respuestas) va por WS a esa página.
     try {
       const joinRes = await this.recall.joinMeet({
         interviewId: iv.id,
         meetUrl: iv.meetUrl,
         language: this.job.requirements.language,
-        initialAudioBase64: introAudio?.audioBase64,
       });
       if (joinRes.status === 'error') {
         throw new Error('Recall.ai no pudo crear el bot');
@@ -125,9 +142,9 @@ export class InterviewEngine {
       throw err;
     }
 
-    // 4) Registrar la pregunta y emitir eventos al frontend, pero NO volver a
-    //    reproducirla con playAudio (ya la dice automatic_audio_output).
-    await this.askQuestion(intro, { skipBotPlayback: true, preTtsAudio: introAudio ?? undefined });
+    // 3) Mandar el saludo al bot-stage (el bus bufferiza si la página todavía
+    //    no se conectó al WS).
+    await this.askQuestion(intro, { preTtsAudio: introAudio ?? undefined });
   }
 
   /**
@@ -244,13 +261,14 @@ export class InterviewEngine {
           this.answerStartedAtMs = Date.now();
           if (this.candidateAnswerTimer) clearTimeout(this.candidateAnswerTimer);
         } else {
-          // Cuando deja de hablar, espera ~600 ms para considerar la respuesta completa.
+          // Cuando deja de hablar, dispara rápido para que la muletilla suene casi
+          // inmediatamente después del silencio.
           if (this.candidateAnswerTimer) clearTimeout(this.candidateAnswerTimer);
           this.candidateAnswerTimer = setTimeout(() => {
             this.commitAnswer().catch((err) =>
               logger.error({ err }, 'Error procesando respuesta')
             );
-          }, 600);
+          }, 250);
         }
       } else {
         this.emit('bot_speaking', { isSpeaking });
@@ -274,15 +292,40 @@ export class InterviewEngine {
 
       if (evt.payload.speaker === 'candidate' && evt.payload.isFinal) {
         this.answerBuffer.push(evt.payload.text);
+        if (this.captionSilenceTimer) clearTimeout(this.captionSilenceTimer);
+        this.captionSilenceTimer = setTimeout(() => {
+          this.commitAnswer().catch((err) =>
+            logger.error({ err }, 'Error procesando respuesta (caption silence)')
+          );
+        }, 500);
       }
     }
   }
 
   private async commitAnswer() {
     if (this.finished || !this.currentTurn) return;
+    if (this.captionSilenceTimer) { clearTimeout(this.captionSilenceTimer); this.captionSilenceTimer = null; }
 
     const text = this.answerBuffer.join(' ').trim();
     this.answerBuffer = [];
+
+    if (!text) {
+      logger.info('commitAnswer: respuesta vacía, skip');
+      return;
+    }
+
+    if (this.botId && this.fillerAudios.length > 0 && !this.fillerPlaying) {
+      this.fillerPlaying = true;
+      const pick = this.fillerAudios[Math.floor(Math.random() * this.fillerAudios.length)];
+      this.recall.playAudio({
+        interviewId: this.interviewId,
+        botId: this.botId,
+        audioBase64: pick.audioBase64,
+        mimeType: pick.mimeType,
+        text: '(muletilla)',
+      }).catch(() => {}).finally(() => { this.fillerPlaying = false; });
+    }
+
     const durationSec =
       this.answerStartedAtMs > 0 ? Math.max(1, Math.round((Date.now() - this.answerStartedAtMs) / 1000)) : 1;
 
@@ -451,6 +494,20 @@ export class InterviewEngine {
   private emit(type: string, payload: unknown) {
     this.events.emit('event', { type, payload });
   }
+
+  /**
+   * Limpia listeners y timers — necesario antes de crear un nuevo engine para
+   * la misma entrevista, sino el engine viejo sigue procesando webhooks con
+   * estado obsoleto.
+   */
+  dispose() {
+    this.finished = true;
+    try {
+      this.recall.events.off('event', this.boundRecallHandler);
+    } catch { /* noop */ }
+    if (this.candidateAnswerTimer) clearTimeout(this.candidateAnswerTimer);
+    if (this.captionSilenceTimer) clearTimeout(this.captionSilenceTimer);
+  }
 }
 
 // ============================================================
@@ -468,6 +525,8 @@ export function getEngine(db: Database, interviewId: string): InterviewEngine {
 }
 
 export function disposeEngine(interviewId: string) {
+  const e = engines.get(interviewId);
+  if (e) e.dispose();
   engines.delete(interviewId);
 }
 
@@ -513,4 +572,19 @@ function tokenSet(text: string): Set<string> {
 
 function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max - 1) + '…' : s;
+}
+
+// Backstop: si el modelo genera una "muletilla" larga o evaluativa o de
+// transición, la descartamos antes de pre-sintetizar. Mejor pocas y buenas
+// que muchas y raras.
+const BANNED_FILLER_PATTERNS = /(\bbuen[ií]simo\b|\bperfecto\b|\bexcelente\b|\bmuy bien\b|\bgenial\b|\bincre[ií]ble\b|\bfant[áa]stico\b|\bbrillante\b|\bqu[ée] bueno\b|\binteresante\b|\bpasemos\b|\bcambi(emos|amos|emos)\b|\botro tema\b|\bsiguiente pregunta\b|\bvamos con\b|\btengo una pregunta\b|\bte quer[ií]a preguntar\b|\buna consulta\b|\bahora te pregunto\b)/i;
+
+function isNeutralFiller(s: string): boolean {
+  const t = s.trim();
+  if (!t) return false;
+  const words = t.split(/\s+/).filter(Boolean).length;
+  if (words === 0 || words > 5) return false;
+  if (t.length > 40) return false;
+  if (BANNED_FILLER_PATTERNS.test(t)) return false;
+  return true;
 }

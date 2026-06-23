@@ -35,10 +35,19 @@ export class GeminiLeia implements LeiaService {
 
   async generateFillers(input: FirstQuestionInput): Promise<string[]> {
     const sys = `Sos leIA — entrevistadora virtual, español rioplatense, voseo natural.
-Generás muletillas cortas (3 a 10 palabras) que vas a decir cuando estés pensando la próxima pregunta durante una entrevista.
-Variedad obligatoria: algunas reflexivas ("dejame pensar"), algunas que validan ("ajá, te sigo"), algunas que conectan ("bien, vamos con esto").
-Tono ${input.job.preferences.toneOfVoice}. Naturales, no plásticas.
-Devolvé JSON estricto: {"fillers":["...", "..."]} con 10 muletillas DISTINTAS.`;
+Generás muletillas MUY cortas (1 a 5 palabras) que vas a decir como reacción al final de una respuesta del candidato, mientras pensás qué preguntar.
+
+REQUISITO CLAVE: la misma muletilla tiene que servir para CUALQUIER tipo de respuesta — buena, mala, rara, incompleta, off-topic. Por eso son neutras: no juzgan, no transicionan, no anuncian. Son lo que diría un humano que está pensando en voz alta.
+
+Ejemplos del estilo que buscamos: "Ajá.", "Mmm.", "Okey.", "A ver.", "Dale.", "Entiendo.", "Anotado.", "Te sigo.", "Mhm.", "Claro.", "Bueno.", "Ahá, sí.", "Mmm, a ver.", "Dejame pensar.", "Dame un segundo.", "Ya.", "Ok, ok.", "Aha.", "Hmm.", "Anotando."
+
+PROHIBIDO:
+- Evaluativas (juzgan la respuesta): "buenísimo", "perfecto", "excelente", "muy bien", "genial", "increíble", "fantástico", "brillante", "qué bueno", "interesante".
+- Transicionales o de cierre: "pasemos a otro tema", "vamos con la próxima", "siguiente pregunta", "cambiemos de tema", "ahora te pregunto".
+- Anuncios o introducciones de pregunta: "te quería preguntar", "ahora voy con", "tengo una pregunta", "una consulta".
+- Largas (más de 5 palabras) o explicativas.
+
+Tono ${input.job.preferences.toneOfVoice}. Voseo natural rioplatense. Devolvé JSON ESTRICTO con esta forma exacta: {"fillers":["...", "..."]} con 20 muletillas DISTINTAS, cada una de 1 a 5 palabras.`;
     try {
       const text = await this.callGemini({
         system: sys,
@@ -120,10 +129,9 @@ Devolvé SOLO el texto a decir, sin comillas ni metadatos.`;
           lastAnswer: input.lastAnswer,
           turnIndex: input.turnIndex,
         }),
-        maxTokens: 450,
+        maxTokens: 700,
         temperature: 0.6,
         json: true,
-        schema: 'evaluate',
       });
       const parsed = parseEvaluate(text);
 
@@ -215,7 +223,6 @@ Devolvé SOLO el texto a decir, sin comillas ni metadatos.`;
     maxTokens: number;
     temperature: number;
     json?: boolean;
-    schema?: 'evaluate';
   }): Promise<string> {
     const model = config.GEMINI_MODEL;
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(
@@ -238,37 +245,6 @@ Devolvé SOLO el texto a decir, sin comillas ni metadatos.`;
     };
     if (opts.json) {
       body.generationConfig.responseMimeType = 'application/json';
-    }
-    if (opts.schema === 'evaluate') {
-      // Schema explícito → Gemini genera más rápido y no improvisa formato.
-      const dim = { type: 'NUMBER' };
-      body.generationConfig.responseSchema = {
-        type: 'OBJECT',
-        properties: {
-          evaluation: {
-            type: 'OBJECT',
-            properties: {
-              score: dim,
-              dimensions: {
-                type: 'OBJECT',
-                properties: {
-                  comunicacion: dim,
-                  tecnicos: dim,
-                  experiencia: dim,
-                  resolucion: dim,
-                  actitud: dim,
-                  trabajoEquipo: dim,
-                },
-              },
-              flags: { type: 'ARRAY', items: { type: 'STRING' } },
-              rationale: { type: 'STRING' },
-            },
-          },
-          nextQuestion: { type: 'STRING' },
-          isClarification: { type: 'BOOLEAN' },
-          shouldFinish: { type: 'BOOLEAN' },
-        },
-      };
     }
 
     // En 429 con retryDelay corto (<5s) hacemos UN retry; si es largo o el segundo
@@ -319,15 +295,15 @@ function sleep(ms: number) {
 
 // -------------------- Parsers (idénticos a claude.ts) --------------------
 function extractJSON(text: string): string {
-  const trimmed = text.trim();
+  let trimmed = text.trim();
   if (trimmed.startsWith('```')) {
     const m = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-    if (m) return m[1].trim();
+    if (m) trimmed = m[1].trim();
   }
   const start = trimmed.indexOf('{');
   const end = trimmed.lastIndexOf('}');
-  if (start !== -1 && end !== -1 && end > start) return trimmed.slice(start, end + 1);
-  return trimmed;
+  if (start !== -1 && end !== -1 && end > start) trimmed = trimmed.slice(start, end + 1);
+  return trimmed.replace(/,\s*([\]}])/g, '$1');
 }
 
 function clamp10(n: unknown): number {

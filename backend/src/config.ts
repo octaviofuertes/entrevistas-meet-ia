@@ -33,7 +33,7 @@ const ConfigSchema = z.object({
   RECALL_BOT_NAME: z.string().default('leIA · Entrevistadora'),
 
   // ElevenLabs - TTS.
-  TTS_DRIVER: z.enum(['mock', 'elevenlabs', 'gemini']).default('mock'),
+  TTS_DRIVER: z.enum(['mock', 'elevenlabs', 'gemini', 'edge']).default('mock'),
   ELEVENLABS_API_KEY: z.string().optional().default(''),
   ELEVENLABS_VOICE_ID: z.string().default('21m00Tcm4TlvDq8ikWAM'),
   ELEVENLABS_MODEL: z.string().default('eleven_multilingual_v2'),

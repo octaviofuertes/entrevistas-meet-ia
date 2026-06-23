@@ -3,6 +3,7 @@ import { v4 as uuid } from 'uuid';
 import { z } from 'zod';
 import { getDb } from '../db';
 import { generateMeetUrl } from '../services/interview/meet';
+import { getEngine, disposeEngine } from '../services/interview/engine';
 import type { Interview } from '../types';
 
 const CreateInterviewSchema = z.object({
@@ -83,7 +84,9 @@ export async function interviewsRoutes(app: FastifyInstance) {
     const interview = await db.getInterview(id);
     if (!interview) return reply.code(404).send({ error: 'interview_not_found' });
 
-    const { getEngine } = await import('../services/interview/engine');
+    // Descartamos el engine anterior siempre. Si el bot previo se desconectó por
+    // timeout, el engine viejo tiene started=true y no crearía un bot nuevo.
+    disposeEngine(id);
     const engine = getEngine(db, id);
     try {
       await engine.start();
@@ -105,7 +108,6 @@ export async function interviewsRoutes(app: FastifyInstance) {
       await db.updateInterview(id, { behavioralAnalysis: body.behavior });
     }
 
-    const { getEngine } = await import('../services/interview/engine');
     const engine = getEngine(db, id);
     const reports = await engine.stop('manual');
     return { ok: true, reports };
@@ -123,7 +125,6 @@ export async function interviewsRoutes(app: FastifyInstance) {
     const interview = await db.getInterview(id);
     if (!interview) return reply.code(404).send({ error: 'interview_not_found' });
 
-    const { getEngine } = await import('../services/interview/engine');
     const engine = getEngine(db, id);
     await engine.simulateCandidateAnswer(parsed.data.text);
     return { ok: true };

@@ -3,6 +3,7 @@ import { logger } from '../../logger';
 import { MockTTS } from './mock';
 import { ElevenLabsTTS } from './elevenlabs';
 import { GeminiTTS } from './gemini';
+import { EdgeTTS } from './edge';
 
 export interface TTSResult {
   audioBase64: string;
@@ -20,7 +21,10 @@ let instance: TTSService | null = null;
 export function getTTS(): TTSService {
   if (instance) return instance;
 
-  if (config.TTS_DRIVER === 'gemini') {
+  if (config.TTS_DRIVER === 'edge') {
+    logger.info('TTS: Microsoft Edge (gratis, voces neuronales)');
+    instance = new EdgeTTS();
+  } else if (config.TTS_DRIVER === 'gemini') {
     if (!config.GEMINI_API_KEY) {
       logger.warn('TTS_DRIVER=gemini pero GEMINI_API_KEY vacío. Usando mock.');
       instance = new MockTTS();

@@ -12,6 +12,7 @@ import { jobsRoutes } from './routes/jobs';
 import { leiaRoutes } from './routes/leia';
 import { interviewWsRoute } from './realtime/interview-ws';
 import { recallWebhookRoute } from './realtime/recall-webhook';
+import { botStageRoute } from './realtime/bot-stage';
 
 async function buildServer() {
   const app = Fastify({
@@ -55,6 +56,8 @@ async function buildServer() {
     if (url.startsWith('/api/health')) return;
     if (url.startsWith('/ws/')) return;
     if (url.startsWith('/webhooks/')) return;
+    if (url.startsWith('/bot-stage/')) return;
+    if (url.startsWith('/bot-stage-diag')) return;
 
     const auth = req.headers.authorization;
     if (auth !== `Bearer ${config.ADMIN_TOKEN}`) {
@@ -69,6 +72,7 @@ async function buildServer() {
   await app.register(reportsRoutes);
   await app.register(interviewWsRoute);
   await app.register(recallWebhookRoute);
+  await app.register(botStageRoute);
 
   await getDb();
   return app;

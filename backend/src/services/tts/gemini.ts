@@ -2,27 +2,17 @@ import { config } from '../../config';
 import { logger } from '../../logger';
 import type { TTSService, TTSResult } from './index';
 import { MockTTS } from './mock';
-// lamejs es ESM puro, lo cargamos dinámicamente para evitar problemas con tsx/CJS.
-let mp3EncoderCtor: any = null;
-async function getMp3Encoder() {
-  if (!mp3EncoderCtor) {
-    const mod: any = await import('@breezystack/lamejs');
-    mp3EncoderCtor = mod.Mp3Encoder ?? mod.default?.Mp3Encoder;
-    if (!mp3EncoderCtor) throw new Error('No se pudo cargar Mp3Encoder de lamejs');
-  }
-  return mp3EncoderCtor;
-}
 
 /**
  * Driver TTS usando la voz nativa de Gemini.
  *
- * Modelo: gemini-2.5-flash-preview-tts (configurable).
+ * Modelo: gemini-2.5-pro-preview-tts (configurable).
  * Voces (prebuilt): Kore, Aoede, Puck, Charon, Fenrir, Leda, Orus, Zephyr, etc.
  *
  * Endpoint: POST /v1beta/models/{model}:generateContent
  * Gemini devuelve PCM raw 16-bit LE 24kHz mono. Lo codificamos a MP3 con lamejs
- * porque Recall.ai espera MP3 base64 en /output_audio. El browser también lo
- * reproduce sin drama.
+ * porque /output_audio de Recall espera kind:'mp3'. Recall hace su propia
+ * decodificación nativa antes de stremear al Meet, así que no hay glitches.
  *
  * Si la API falla cae al MockTTS para no romper la entrevista.
  */
@@ -75,15 +65,15 @@ export class GeminiTTS implements TTSService {
 
       const rate = parseRateFromMime(sourceMime) ?? 24000;
       const pcm = Buffer.from(pcmBase64, 'base64');
-      const mp3 = await pcmToMp3(pcm, rate);
+      const wav = pcmToWav(pcm, rate);
 
       const durationMs = Math.round((pcm.length / 2 / rate) * 1000);
 
       return {
-        audioBase64: mp3.toString('base64'),
-        mimeType: 'audio/mpeg',
+        audioBase64: wav.toString('base64'),
+        mimeType: 'audio/wav',
         durationMs: Math.max(800, durationMs),
-        bytes: mp3.length,
+        bytes: wav.length,
       };
     } catch (err) {
       logger.warn({ err }, 'gemini.tts: fallback a mock');
@@ -98,28 +88,26 @@ function parseRateFromMime(mime: string): number | undefined {
 }
 
 /**
- * PCM 16-bit LE mono → MP3 (libreria lamejs, sin binarios externos).
- * 24kHz mono a 96 kbps queda con buena calidad para voz.
+ * Envuelve PCM 16-bit LE mono en un header WAV (RIFF/PCM, 44 bytes).
+ * Sin compresión, sin pérdida — el <audio> nativo del Chrome del bot lo
+ * reproduce limpio sin glitches de decodificación.
  */
-async function pcmToMp3(pcm: Buffer, sampleRate: number): Promise<Buffer> {
-  const Encoder = await getMp3Encoder();
-  const samples = new Int16Array(pcm.buffer, pcm.byteOffset, pcm.length / 2);
-  const encoder = new Encoder(1, sampleRate, 96);
-  const chunkSize = 1152;
-  const mp3Data: Uint8Array[] = [];
-  for (let i = 0; i < samples.length; i += chunkSize) {
-    const chunk = samples.subarray(i, i + chunkSize);
-    const encoded = encoder.encodeBuffer(chunk);
-    if (encoded.length > 0) mp3Data.push(encoded);
-  }
-  const flushed = encoder.flush();
-  if (flushed.length > 0) mp3Data.push(flushed);
-  const total = mp3Data.reduce((a, b) => a + b.length, 0);
-  const out = Buffer.alloc(total);
-  let offset = 0;
-  for (const part of mp3Data) {
-    out.set(part, offset);
-    offset += part.length;
-  }
-  return out;
+function pcmToWav(pcm: Buffer, sampleRate: number, channels = 1, bitsPerSample = 16): Buffer {
+  const byteRate = (sampleRate * channels * bitsPerSample) / 8;
+  const blockAlign = (channels * bitsPerSample) / 8;
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + pcm.length, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([header, pcm]);
 }
