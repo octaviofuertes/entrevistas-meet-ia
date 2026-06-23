@@ -1,25 +1,44 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { Layout } from '@/components/Layout';
 import { StatusBadge } from '@/components/StatusBadge';
-import { apiGetInterview, apiFinalizeInterview, apiStartInterview } from '@/lib/api';
+import {
+  apiFinalizeInterview,
+  apiGetInterview,
+  apiStartInterview,
+  apiUpdateInterviewTTS,
+} from '@/lib/api';
 import { DIMENSION_LABELS } from '@/lib/types';
-import type { InterviewDetail } from '@/lib/types';
+import type { InterviewDetail, TTSDriver } from '@/lib/types';
+
+const TTS_OPTIONS: Array<{ value: TTSDriver; label: string }> = [
+  { value: 'gemini', label: 'Gemini TTS' },
+  { value: 'edge', label: 'Microsoft TTS' },
+];
+
+function normalizeTtsDriver(value?: TTSDriver | null): TTSDriver {
+  return value === 'edge' ? 'edge' : 'gemini';
+}
 
 export default function EntrevistaDetallePage() {
   const params = useParams<{ id: string }>();
-  const router = useRouter();
   const [data, setData] = useState<InterviewDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedTtsDriver, setSelectedTtsDriver] = useState<TTSDriver>('gemini');
+  const [savingTts, setSavingTts] = useState(false);
+  const [starting, setStarting] = useState(false);
 
   const load = async () => {
     try {
       setLoading(true);
-      setData(await apiGetInterview(params.id));
+      const interview = await apiGetInterview(params.id);
+      setData(interview);
+      setSelectedTtsDriver(normalizeTtsDriver(interview.ttsDriver));
+      setError(null);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -33,22 +52,41 @@ export default function EntrevistaDetallePage() {
 
   async function onStart() {
     if (!data?.meetUrl) return alert('No hay link de Meet configurado');
-    // Abrimos el Meet y disparamos la creación del bot en paralelo. Recall espera
-    // hasta 20 min en la waiting room, te sobra tiempo para entrar y admitir el bot.
     window.open(data.meetUrl, '_blank');
     try {
-      await apiStartInterview(params.id);
-      load();
+      setStarting(true);
+      await apiStartInterview(params.id, { ttsDriver: selectedTtsDriver });
+      await load();
     } catch (e: any) {
       alert(e.message);
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  async function onSelectTtsDriver(ttsDriver: TTSDriver) {
+    if (!data || data.status !== 'agendada' || savingTts) return;
+    const previous = selectedTtsDriver;
+    setSelectedTtsDriver(ttsDriver);
+    setSavingTts(true);
+    try {
+      const res = await apiUpdateInterviewTTS(params.id, ttsDriver);
+      setData((current) =>
+        current ? { ...current, ttsDriver: res.interview?.ttsDriver ?? ttsDriver } : current
+      );
+    } catch (e: any) {
+      setSelectedTtsDriver(previous);
+      alert(e.message || 'No se pudo guardar la voz');
+    } finally {
+      setSavingTts(false);
     }
   }
 
   async function onFinalize() {
-    if (!confirm('¿Cerrar la entrevista y generar los informes?')) return;
+    if (!confirm('Cerrar la entrevista y generar los informes?')) return;
     try {
       await apiFinalizeInterview(params.id);
-      load();
+      await load();
     } catch (e: any) {
       alert(e.message);
     }
@@ -59,29 +97,34 @@ export default function EntrevistaDetallePage() {
 
   const hasR1 = data.reports.some((r) => r.kind === 1);
   const hasR2 = data.reports.some((r) => r.kind === 2);
+  const canEditVoice = data.status === 'agendada';
+  const selectedVoiceLabel =
+    TTS_OPTIONS.find((option) => option.value === selectedTtsDriver)?.label ?? 'Gemini TTS';
 
   return (
     <Layout>
       <header className="mb-6">
         <Link href="/entrevistas" className="text-sm text-slate-500 hover:text-slate-700">
-          ← Volver
+          {'<- Volver'}
         </Link>
-        <div className="flex items-center justify-between mt-2">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between mt-2">
           <div>
             <h1 className="text-3xl font-bold text-slate-900">
               {data.candidate?.name ?? 'Entrevista'}
             </h1>
             <p className="text-slate-600 mt-1">
-              {data.job?.title ?? '—'} · {data.job?.company ?? ''}
+              {data.job?.title ?? '-'} - {data.job?.company ?? ''}
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <StatusBadge status={data.status} />
             {(data.status === 'agendada' || data.status === 'en_curso') && (
-              <button onClick={onStart} className="btn-primary">▶ Iniciar entrevista</button>
+              <button onClick={onStart} className="btn-primary" disabled={starting}>
+                {starting ? 'Iniciando...' : 'Iniciar entrevista'}
+              </button>
             )}
             {data.status === 'en_curso' && (
-              <button onClick={load} className="btn-secondary">↻ Refrescar</button>
+              <button onClick={load} className="btn-secondary">Refrescar</button>
             )}
             {data.status === 'en_curso' && (
               <button onClick={onFinalize} className="btn-secondary">Finalizar</button>
@@ -106,7 +149,7 @@ export default function EntrevistaDetallePage() {
             <h2 className="text-lg font-semibold mb-3">Turnos pregunta/respuesta</h2>
             {data.turns.length === 0 ? (
               <p className="text-sm text-slate-500">
-                Todavía no hubo turnos. Inicia la entrevista para que leIA arranque.
+                Todavia no hubo turnos. Inicia la entrevista para que leIA arranque.
               </p>
             ) : (
               <div className="space-y-4">
@@ -121,7 +164,7 @@ export default function EntrevistaDetallePage() {
                       </div>
                       {evalForTurn && (
                         <div className="text-xs text-slate-500 mt-1">
-                          Score: <strong>{evalForTurn.score.toFixed(1)}/10</strong> · {evalForTurn.rationale}
+                          Score: <strong>{evalForTurn.score.toFixed(1)}/10</strong> - {evalForTurn.rationale}
                         </div>
                       )}
                     </div>
@@ -140,7 +183,7 @@ export default function EntrevistaDetallePage() {
                 {data.evaluations.map((e, i) => (
                   <div key={e.id} className="p-3 bg-slate-50 rounded-lg">
                     <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-medium">Evaluación #{i + 1}</span>
+                      <span className="text-sm font-medium">Evaluacion #{i + 1}</span>
                       <span className="badge bg-primary-100 text-primary-800">
                         {e.score.toFixed(1)}/10
                       </span>
@@ -174,23 +217,59 @@ export default function EntrevistaDetallePage() {
           <div className="card">
             <h3 className="font-semibold mb-3">Detalles</h3>
             <dl className="text-sm space-y-2">
-              <Row label="Puesto" value={data.job?.title ?? '—'} />
-              <Row label="Empresa" value={data.job?.company ?? '—'} />
-              <Row label="Candidato" value={data.candidate?.name ?? '—'} />
-              <Row label="Email" value={data.candidate?.email ?? '—'} />
+              <Row label="Puesto" value={data.job?.title ?? '-'} />
+              <Row label="Empresa" value={data.job?.company ?? '-'} />
+              <Row label="Candidato" value={data.candidate?.name ?? '-'} />
+              <Row label="Email" value={data.candidate?.email ?? '-'} />
+              <Row label="Voz" value={selectedVoiceLabel} />
               <Row label="Turnos" value={data.turns.length} />
               <Row label="Evaluaciones" value={data.evaluations.length} />
               <Row label="Creada" value={new Date(data.createdAt).toLocaleString('es-AR')} />
               {data.startedAt && <Row label="Iniciada" value={new Date(data.startedAt).toLocaleString('es-AR')} />}
               {data.endedAt && <Row label="Finalizada" value={new Date(data.endedAt).toLocaleString('es-AR')} />}
-              {data.durationSec && <Row label="Duración" value={`${Math.round(data.durationSec / 60)} min`} />}
+              {data.durationSec && <Row label="Duracion" value={`${Math.round(data.durationSec / 60)} min`} />}
             </dl>
+          </div>
+
+          <div className="card">
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <h3 className="font-semibold">Voz de leIA</h3>
+              {savingTts && <span className="text-xs text-slate-500">Guardando...</span>}
+            </div>
+            <div
+              className="grid grid-cols-2 rounded-lg border border-slate-200 bg-slate-50 p-1"
+              role="radiogroup"
+              aria-label="Voz de leIA"
+            >
+              {TTS_OPTIONS.map((option) => {
+                const active = selectedTtsDriver === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    disabled={!canEditVoice || savingTts || starting}
+                    onClick={() => onSelectTtsDriver(option.value)}
+                    className={[
+                      'min-h-[40px] rounded-md px-3 text-sm font-medium transition-colors',
+                      active
+                        ? 'bg-white text-primary-700 shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900',
+                      !canEditVoice || savingTts || starting ? 'cursor-not-allowed opacity-70' : '',
+                    ].join(' ')}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           <div className="card">
             <h3 className="font-semibold mb-2">Google Meet</h3>
             <p className="text-xs text-slate-500 mb-2">
-              Recall.ai entra como bot a esta reunión y captura los captions nativos.
+              Recall.ai entra como bot a esta reunion y captura los captions nativos.
             </p>
             <a
               href={data.meetUrl}
@@ -209,7 +288,7 @@ export default function EntrevistaDetallePage() {
             <div className="card bg-primary-50 border-primary-200">
               <h3 className="font-semibold mb-2">Entrevista en curso</h3>
               <p className="text-xs text-slate-600 mb-3">
-                leIA está entrevistando al candidato en Google Meet.
+                leIA esta entrevistando al candidato en Google Meet.
               </p>
               <a
                 href={data.meetUrl}
@@ -229,9 +308,9 @@ export default function EntrevistaDetallePage() {
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between">
+    <div className="flex items-center justify-between gap-4">
       <dt className="text-slate-500">{label}</dt>
-      <dd className="font-medium text-slate-900 text-right">{value}</dd>
+      <dd className="font-medium text-slate-900 text-right break-words">{value}</dd>
     </div>
   );
 }

@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS interviews (
     status                TEXT NOT NULL DEFAULT 'pendiente'
                           CHECK (status IN ('pendiente','agendada','en_curso','completada','cancelada','error')),
     meet_url              TEXT NOT NULL,
+    tts_driver            TEXT NOT NULL DEFAULT 'gemini'
+                          CHECK (tts_driver IN ('gemini','edge')),
     recall_bot_id         TEXT,
     scheduled_at          TIMESTAMPTZ,
     started_at            TIMESTAMPTZ,
@@ -62,6 +64,22 @@ CREATE TABLE IF NOT EXISTS interviews (
 CREATE INDEX IF NOT EXISTS idx_interviews_job ON interviews (job_id);
 CREATE INDEX IF NOT EXISTS idx_interviews_candidate ON interviews (candidate_id);
 CREATE INDEX IF NOT EXISTS idx_interviews_status ON interviews (status);
+
+ALTER TABLE interviews
+    ADD COLUMN IF NOT EXISTS tts_driver TEXT NOT NULL DEFAULT 'gemini';
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'chk_interviews_tts_driver'
+    ) THEN
+        ALTER TABLE interviews
+            ADD CONSTRAINT chk_interviews_tts_driver
+            CHECK (tts_driver IN ('gemini','edge'));
+    END IF;
+END $$;
 
 -- ----------------------------------------------------------------
 -- Interview turns (par pregunta/respuesta)

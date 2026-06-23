@@ -1,5 +1,6 @@
 import { config } from '../../config';
 import { logger } from '../../logger';
+import type { TTSDriver } from '../../types';
 import { MockTTS } from './mock';
 import { ElevenLabsTTS } from './elevenlabs';
 import { GeminiTTS } from './gemini';
@@ -16,17 +17,20 @@ export interface TTSService {
   synthesize(text: string, opts?: { voiceId?: string }): Promise<TTSResult>;
 }
 
-let instance: TTSService | null = null;
+const instances = new Map<TTSDriver, TTSService>();
 
-export function getTTS(): TTSService {
-  if (instance) return instance;
+export function getTTS(driver: TTSDriver = config.TTS_DRIVER): TTSService {
+  const selected = normalizeDriver(driver);
+  const cached = instances.get(selected);
+  if (cached) return cached;
 
-  if (config.TTS_DRIVER === 'edge') {
-    logger.info('TTS: Microsoft Edge (gratis, voces neuronales)');
+  let instance: TTSService;
+  if (selected === 'edge') {
+    logger.info('TTS: Microsoft Edge activo');
     instance = new EdgeTTS();
-  } else if (config.TTS_DRIVER === 'gemini') {
+  } else if (selected === 'gemini') {
     if (!config.GEMINI_API_KEY) {
-      logger.warn('TTS_DRIVER=gemini pero GEMINI_API_KEY vacío. Usando mock.');
+      logger.warn('TTS_DRIVER=gemini pero GEMINI_API_KEY vacio. Usando mock.');
       instance = new MockTTS();
     } else {
       logger.info(
@@ -35,9 +39,9 @@ export function getTTS(): TTSService {
       );
       instance = new GeminiTTS();
     }
-  } else if (config.TTS_DRIVER === 'elevenlabs') {
+  } else if (selected === 'elevenlabs') {
     if (!config.ELEVENLABS_API_KEY) {
-      logger.warn('TTS_DRIVER=elevenlabs pero ELEVENLABS_API_KEY vacío. Usando mock.');
+      logger.warn('TTS_DRIVER=elevenlabs pero ELEVENLABS_API_KEY vacio. Usando mock.');
       instance = new MockTTS();
     } else {
       logger.info({ voiceId: config.ELEVENLABS_VOICE_ID }, 'TTS: ElevenLabs activo');
@@ -47,5 +51,12 @@ export function getTTS(): TTSService {
     logger.info('TTS en modo mock');
     instance = new MockTTS();
   }
+
+  instances.set(selected, instance);
   return instance;
+}
+
+function normalizeDriver(driver: TTSDriver): TTSDriver {
+  if (driver === 'edge' || driver === 'gemini' || driver === 'elevenlabs') return driver;
+  return 'mock';
 }

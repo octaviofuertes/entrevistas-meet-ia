@@ -1,5 +1,6 @@
 export type UUID = string;
 export type ISODate = string;
+export type TTSDriver = 'mock' | 'elevenlabs' | 'gemini' | 'edge';
 
 // ============================================================
 // JOBS - puestos generados a partir de un link
@@ -92,6 +93,7 @@ export interface Interview {
   candidateId: UUID;
   status: InterviewStatus;
   meetUrl: string;
+  ttsDriver?: TTSDriver | null;
   recallBotId?: string | null;
   scheduledAt?: ISODate | null;
   startedAt?: ISODate | null;

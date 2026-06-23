@@ -1,4 +1,5 @@
 export type UUID = string;
+export type TTSDriver = 'gemini' | 'edge';
 
 export type InterviewDimension =
   | 'comunicacion'
@@ -90,6 +91,7 @@ export interface Interview {
   candidateId: UUID;
   status: InterviewStatus;
   meetUrl: string;
+  ttsDriver?: TTSDriver | null;
   recallBotId?: string | null;
   scheduledAt?: string | null;
   startedAt?: string | null;

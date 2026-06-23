@@ -12,7 +12,7 @@ import type {
   TranscriptFragment,
 } from '../../types';
 import { getLeia } from '../leia';
-import { getTTS } from '../tts';
+import { getTTS, type TTSService } from '../tts';
 import { getRecall } from '../recall';
 
 /**
@@ -45,15 +45,17 @@ export class InterviewEngine {
   private answerBuffer: string[] = [];
   private answerStartedAtMs = 0;
   private finished = false;
-  private candidateAnswerTimer: NodeJS.Timeout | null = null;
+  private silenceTimer: NodeJS.Timeout | null = null;
+  private committing = false;
+  /** Hasta cuándo consideramos que leIA está hablando (para ignorar su eco). */
+  private botSpeakingUntilMs = 0;
   private recall = getRecall();
   private leia = getLeia();
-  private tts = getTTS();
+  private tts: TTSService = getTTS();
   private boundRecallHandler: (evt: any) => void = () => {};
   private started = false;
-  private fillerAudios: Array<{ audioBase64: string; mimeType: string }> = [];
+  private fillerAudios: Array<{ audioBase64: string; mimeType: string; durationMs: number }> = [];
   private fillerPlaying = false;
-  private captionSilenceTimer: NodeJS.Timeout | null = null;
 
   constructor(private db: Database, interviewId: string) {
     this.interviewId = interviewId;
@@ -66,6 +68,7 @@ export class InterviewEngine {
     const iv = await this.db.getInterview(this.interviewId);
     if (!iv) throw new Error('Entrevista no encontrada');
     this.interview = iv;
+    this.tts = getTTS(iv.ttsDriver ?? undefined);
 
     const job = await this.db.getJob(iv.jobId);
     if (!job) throw new Error('Puesto no encontrado');
@@ -105,7 +108,7 @@ export class InterviewEngine {
         );
         this.fillerAudios = results
           .filter((r): r is PromiseFulfilledResult<any> => r.status === 'fulfilled')
-          .map((r) => ({ audioBase64: r.value.audioBase64, mimeType: r.value.mimeType }));
+          .map((r) => ({ audioBase64: r.value.audioBase64, mimeType: r.value.mimeType, durationMs: r.value.durationMs }));
         logger.info({ requested: safe.length, ready: this.fillerAudios.length }, 'muletillas pre-sintetizadas');
       })
       .catch(() => {});
@@ -163,7 +166,7 @@ export class InterviewEngine {
       return { report1: r1 ?? undefined, report2: r2 ?? undefined };
     }
     this.finished = true;
-    if (this.candidateAnswerTimer) clearTimeout(this.candidateAnswerTimer);
+    if (this.silenceTimer) clearTimeout(this.silenceTimer);
 
     const endMs = Date.now();
     const durationSec = Math.round((endMs - this.startedAtMs) / 1000);
@@ -217,6 +220,10 @@ export class InterviewEngine {
     };
     this.currentTurn = await this.db.createTurn(turn);
 
+    // Arrancamos un turno limpio: descartamos cualquier resto de captions/ruido
+    // del turno anterior que pudiera haber quedado bufferizado.
+    this.resetAnswerState();
+
     let audio = opts?.preTtsAudio;
     if (!audio) {
       try {
@@ -242,7 +249,39 @@ export class InterviewEngine {
         mimeType: audio.mimeType,
         text,
       });
+      // Marcamos que leIA está hablando para ignorar su eco en el micrófono
+      // del candidato durante este audio + una cola corta.
+      this.markBotSpeaking(audio.durationMs);
     }
+  }
+
+  // ============================================================
+  // End-of-turn / half-duplex helpers
+  // ============================================================
+
+  /** leIA va a estar "hablando" durante durationMs + una cola para el eco. */
+  private markBotSpeaking(durationMs: number) {
+    this.botSpeakingUntilMs = Date.now() + Math.max(800, durationMs) + BOT_ECHO_TAIL_MS;
+  }
+
+  private isBotSpeaking(): boolean {
+    return Date.now() < this.botSpeakingUntilMs;
+  }
+
+  /** Limpia el buffer de respuesta y el timer de silencio. */
+  private resetAnswerState() {
+    this.answerBuffer = [];
+    this.answerStartedAtMs = 0;
+    this.committing = false;
+    if (this.silenceTimer) { clearTimeout(this.silenceTimer); this.silenceTimer = null; }
+  }
+
+  /** (Re)arma el timer que dispara commitAnswer tras SILENCE_MS de silencio real. */
+  private armSilenceTimer() {
+    if (this.silenceTimer) clearTimeout(this.silenceTimer);
+    this.silenceTimer = setTimeout(() => {
+      this.commitAnswer().catch((err) => logger.error({ err }, 'Error procesando respuesta'));
+    }, SILENCE_MS);
   }
 
   private async handleRecallEvent(evt: any) {
@@ -256,19 +295,21 @@ export class InterviewEngine {
     if (evt.type === 'speaking') {
       const { speaker, isSpeaking } = evt.payload;
       if (speaker === 'candidate') {
+        // Half-duplex: si leIA está hablando (o cola de eco), lo que el micro
+        // del candidato capta es la propia voz de leIA → lo ignoramos.
+        if (this.isBotSpeaking()) return;
         this.emit('candidate_speaking', { isSpeaking });
         if (isSpeaking) {
-          this.answerStartedAtMs = Date.now();
-          if (this.candidateAnswerTimer) clearTimeout(this.candidateAnswerTimer);
+          if (this.answerStartedAtMs === 0) this.answerStartedAtMs = Date.now();
+          // OJO: NO cancelamos el timer en speech_on. Los eventos VAD se
+          // disparan con cualquier ruido ambiente; si dejáramos que cancelen
+          // el commit, un ruido de fondo postergaría la respuesta para siempre.
+          // El timing lo manejan los captions reales (palabras reconocidas).
         } else {
-          // Cuando deja de hablar, dispara rápido para que la muletilla suene casi
-          // inmediatamente después del silencio.
-          if (this.candidateAnswerTimer) clearTimeout(this.candidateAnswerTimer);
-          this.candidateAnswerTimer = setTimeout(() => {
-            this.commitAnswer().catch((err) =>
-              logger.error({ err }, 'Error procesando respuesta')
-            );
-          }, 250);
+          // speech_off: el candidato dejó de emitir energía de voz → si ya
+          // tenemos texto, armamos el commit. Esto acelera respecto a esperar
+          // sólo el silencio de captions.
+          if (this.answerBuffer.length > 0) this.armSilenceTimer();
         }
       } else {
         this.emit('bot_speaking', { isSpeaking });
@@ -290,33 +331,40 @@ export class InterviewEngine {
       await this.db.appendTranscript(frag);
       this.emit('caption_received', frag);
 
-      if (evt.payload.speaker === 'candidate' && evt.payload.isFinal) {
+      // Sólo procesamos captions del candidato cuando leIA NO está hablando
+      // (si no, sería su propio eco transcripto y atribuido al candidato).
+      if (evt.payload.speaker !== 'candidate' || this.isBotSpeaking()) return;
+
+      if (evt.payload.isFinal && evt.payload.text.trim()) {
+        if (this.answerStartedAtMs === 0) this.answerStartedAtMs = Date.now();
         this.answerBuffer.push(evt.payload.text);
-        if (this.captionSilenceTimer) clearTimeout(this.captionSilenceTimer);
-        this.captionSilenceTimer = setTimeout(() => {
-          this.commitAnswer().catch((err) =>
-            logger.error({ err }, 'Error procesando respuesta (caption silence)')
-          );
-        }, 500);
+        // Cada palabra reconocida re-arma el timer: mientras el candidato hable
+        // no se dispara. Cuando se queda callado de verdad (sin captions
+        // nuevos por SILENCE_MS), procesamos.
+        this.armSilenceTimer();
       }
     }
   }
 
   private async commitAnswer() {
     if (this.finished || !this.currentTurn) return;
-    if (this.captionSilenceTimer) { clearTimeout(this.captionSilenceTimer); this.captionSilenceTimer = null; }
+    if (this.silenceTimer) { clearTimeout(this.silenceTimer); this.silenceTimer = null; }
+    // Guard anti doble-commit: si dos timers se solapan, sólo procesamos una vez.
+    if (this.committing) return;
 
     const text = this.answerBuffer.join(' ').trim();
-    this.answerBuffer = [];
 
     if (!text) {
       logger.info('commitAnswer: respuesta vacía, skip');
       return;
     }
+    this.committing = true;
+    this.answerBuffer = [];
 
     if (this.botId && this.fillerAudios.length > 0 && !this.fillerPlaying) {
       this.fillerPlaying = true;
       const pick = this.fillerAudios[Math.floor(Math.random() * this.fillerAudios.length)];
+      this.markBotSpeaking(pick.durationMs);
       this.recall.playAudio({
         interviewId: this.interviewId,
         botId: this.botId,
@@ -505,10 +553,17 @@ export class InterviewEngine {
     try {
       this.recall.events.off('event', this.boundRecallHandler);
     } catch { /* noop */ }
-    if (this.candidateAnswerTimer) clearTimeout(this.candidateAnswerTimer);
-    if (this.captionSilenceTimer) clearTimeout(this.captionSilenceTimer);
+    if (this.silenceTimer) clearTimeout(this.silenceTimer);
   }
 }
+
+// ============================================================
+// Constantes de timing del turno
+// ============================================================
+/** Silencio (sin captions nuevos del candidato) tras el cual procesamos su respuesta. */
+const SILENCE_MS = 700;
+/** Margen extra tras la voz de leIA durante el cual ignoramos el micro (eco). */
+const BOT_ECHO_TAIL_MS = 500;
 
 // ============================================================
 // Registry para mantener engines activos por interview

@@ -8,6 +8,7 @@ import type {
   Evaluation,
   InterviewTurn,
   TranscriptFragment,
+  TTSDriver,
 } from './types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
@@ -106,14 +107,24 @@ export const apiCreateInterview = (data: {
   candidateId: string;
   meetUrl: string;
   scheduledAt?: string;
+  ttsDriver?: TTSDriver;
 }) =>
   http<Interview>('/api/interviews', {
     method: 'POST',
     body: JSON.stringify(data),
   });
 
-export const apiStartInterview = (id: string) =>
-  http<{ ok: true; interviewId: string }>(`/api/interviews/${id}/start`, { method: 'POST' });
+export const apiUpdateInterviewTTS = (id: string, ttsDriver: TTSDriver) =>
+  http<{ ok: true; interview: Interview | null }>(`/api/interviews/${id}/tts`, {
+    method: 'PATCH',
+    body: JSON.stringify({ ttsDriver }),
+  });
+
+export const apiStartInterview = (id: string, data?: { ttsDriver?: TTSDriver }) =>
+  http<{ ok: true; interviewId: string }>(`/api/interviews/${id}/start`, {
+    method: 'POST',
+    body: data ? JSON.stringify(data) : undefined,
+  });
 
 export const apiFinalizeInterview = (id: string, behavior?: unknown) =>
   http<{ ok: true; reports: { report1?: Report; report2?: Report } }>(

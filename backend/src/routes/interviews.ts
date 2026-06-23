@@ -1,16 +1,27 @@
 import type { FastifyInstance } from 'fastify';
 import { v4 as uuid } from 'uuid';
 import { z } from 'zod';
+import { config } from '../config';
 import { getDb } from '../db';
-import { generateMeetUrl } from '../services/interview/meet';
 import { getEngine, disposeEngine } from '../services/interview/engine';
-import type { Interview } from '../types';
+import type { Interview, TTSDriver } from '../types';
+
+const InterviewTtsDriverSchema = z.enum(['gemini', 'edge']);
 
 const CreateInterviewSchema = z.object({
   jobId: z.string().uuid(),
   candidateId: z.string().uuid(),
   meetUrl: z.string().url(),
   scheduledAt: z.string().datetime().optional(),
+  ttsDriver: InterviewTtsDriverSchema.optional(),
+});
+
+const UpdateInterviewTtsSchema = z.object({
+  ttsDriver: InterviewTtsDriverSchema,
+});
+
+const StartInterviewSchema = z.object({
+  ttsDriver: InterviewTtsDriverSchema.optional(),
 });
 
 export async function interviewsRoutes(app: FastifyInstance) {
@@ -69,6 +80,7 @@ export async function interviewsRoutes(app: FastifyInstance) {
       candidateId: parsed.data.candidateId,
       status: 'agendada',
       meetUrl: parsed.data.meetUrl,
+      ttsDriver: parsed.data.ttsDriver ?? defaultInterviewTtsDriver(),
       recallBotId: null,
       scheduledAt: parsed.data.scheduledAt ?? now,
       createdAt: now,
@@ -78,14 +90,38 @@ export async function interviewsRoutes(app: FastifyInstance) {
     return reply.code(201).send(interview);
   });
 
-  app.post('/api/interviews/:id/start', async (req, reply) => {
+  app.patch('/api/interviews/:id/tts', async (req, reply) => {
+    const parsed = UpdateInterviewTtsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'invalid_input', issues: parsed.error.flatten() });
+    }
+
     const db = await getDb();
     const { id } = req.params as { id: string };
     const interview = await db.getInterview(id);
     if (!interview) return reply.code(404).send({ error: 'interview_not_found' });
+    if (interview.status !== 'agendada') {
+      return reply.code(409).send({ error: 'interview_already_started' });
+    }
 
-    // Descartamos el engine anterior siempre. Si el bot previo se desconectó por
-    // timeout, el engine viejo tiene started=true y no crearía un bot nuevo.
+    const updated = await db.updateInterview(id, { ttsDriver: parsed.data.ttsDriver });
+    return { ok: true, interview: updated };
+  });
+
+  app.post('/api/interviews/:id/start', async (req, reply) => {
+    const parsed = StartInterviewSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'invalid_input', issues: parsed.error.flatten() });
+    }
+
+    const db = await getDb();
+    const { id } = req.params as { id: string };
+    const interview = await db.getInterview(id);
+    if (!interview) return reply.code(404).send({ error: 'interview_not_found' });
+    if (parsed.data.ttsDriver && interview.status === 'agendada') {
+      await db.updateInterview(id, { ttsDriver: parsed.data.ttsDriver });
+    }
+
     disposeEngine(id);
     const engine = getEngine(db, id);
     try {
@@ -102,7 +138,6 @@ export async function interviewsRoutes(app: FastifyInstance) {
     const interview = await db.getInterview(id);
     if (!interview) return reply.code(404).send({ error: 'interview_not_found' });
 
-    // Aceptar el análisis facial opcional (el frontend lo manda al cerrar).
     const body = (req.body ?? {}) as { behavior?: any };
     if (body.behavior && typeof body.behavior === 'object') {
       await db.updateInterview(id, { behavioralAnalysis: body.behavior });
@@ -113,7 +148,6 @@ export async function interviewsRoutes(app: FastifyInstance) {
     return { ok: true, reports };
   });
 
-  // Útil en modo demo: simular que el candidato dijo "text"
   app.post('/api/interviews/:id/simulate-answer', async (req, reply) => {
     const Body = z.object({ text: z.string().min(1) });
     const parsed = Body.safeParse(req.body);
@@ -137,4 +171,8 @@ export async function interviewsRoutes(app: FastifyInstance) {
     if (!ok) return reply.code(404).send({ error: 'interview_not_found' });
     return reply.code(204).send();
   });
+}
+
+function defaultInterviewTtsDriver(): Extract<TTSDriver, 'gemini' | 'edge'> {
+  return config.TTS_DRIVER === 'edge' ? 'edge' : 'gemini';
 }

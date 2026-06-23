@@ -161,14 +161,15 @@ export class PostgresDb implements Database {
 
   async createInterview(i: Interview) {
     await this.pool.query(
-      `INSERT INTO interviews (id, job_id, candidate_id, status, meet_url, recall_bot_id, scheduled_at, started_at, ended_at, duration_sec, behavioral_analysis, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+      `INSERT INTO interviews (id, job_id, candidate_id, status, meet_url, tts_driver, recall_bot_id, scheduled_at, started_at, ended_at, duration_sec, behavioral_analysis, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
       [
         i.id,
         i.jobId,
         i.candidateId,
         i.status,
         i.meetUrl,
+        normalizeTtsDriver(i.ttsDriver),
         i.recallBotId ?? null,
         i.scheduledAt ?? null,
         i.startedAt ?? null,
@@ -187,13 +188,14 @@ export class PostgresDb implements Database {
     if (!existing) return null;
     const merged: Interview = { ...existing, ...patch, updatedAt: new Date().toISOString() };
     await this.pool.query(
-      `UPDATE interviews SET job_id=$2, candidate_id=$3, status=$4, meet_url=$5, recall_bot_id=$6, scheduled_at=$7, started_at=$8, ended_at=$9, duration_sec=$10, behavioral_analysis=$11, updated_at=$12 WHERE id=$1`,
+      `UPDATE interviews SET job_id=$2, candidate_id=$3, status=$4, meet_url=$5, tts_driver=$6, recall_bot_id=$7, scheduled_at=$8, started_at=$9, ended_at=$10, duration_sec=$11, behavioral_analysis=$12, updated_at=$13 WHERE id=$1`,
       [
         merged.id,
         merged.jobId,
         merged.candidateId,
         merged.status,
         merged.meetUrl,
+        normalizeTtsDriver(merged.ttsDriver),
         merged.recallBotId ?? null,
         merged.scheduledAt ?? null,
         merged.startedAt ?? null,
@@ -379,6 +381,7 @@ function rowToInterview(r: any): Interview {
     candidateId: r.candidate_id,
     status: r.status,
     meetUrl: r.meet_url,
+    ttsDriver: normalizeTtsDriver(r.tts_driver),
     recallBotId: r.recall_bot_id,
     scheduledAt: r.scheduled_at?.toISOString() ?? null,
     startedAt: r.started_at?.toISOString() ?? null,
@@ -388,6 +391,10 @@ function rowToInterview(r: any): Interview {
     createdAt: r.created_at.toISOString(),
     updatedAt: r.updated_at.toISOString(),
   };
+}
+
+function normalizeTtsDriver(value: unknown): 'gemini' | 'edge' {
+  return value === 'edge' ? 'edge' : 'gemini';
 }
 
 function rowToTurn(r: any): InterviewTurn {
