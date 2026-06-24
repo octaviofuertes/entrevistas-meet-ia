@@ -148,6 +148,9 @@ export interface BehavioralAnalysis {
 export interface Report1Payload {
   summary: string;
   highlights: string[];
+  keyMoments?: string[];
+  topicsCovered?: string[];
+  concerns?: string[];
   behavioralObservations?: string[];
   behavior?: BehavioralAnalysis | null;
   fullTranscript: Array<{ speaker: 'bot' | 'candidate'; text: string; atMs: number }>;
@@ -155,7 +158,22 @@ export interface Report1Payload {
   language: string;
 }
 
+export interface SentimentDistribution {
+  positive: number;
+  neutral: number;
+  negative: number;
+  notApplicable: number;
+}
+
+export interface QualityDistribution {
+  excellent: number;
+  good: number;
+  fair: number;
+  poor: number;
+}
+
 export interface Report2Payload {
+  executiveSummary: string;
   scoreTotal: number;
   dimensions: DimensionScores;
   stackScores: Record<string, number>;
@@ -163,6 +181,9 @@ export interface Report2Payload {
   strengths: string[];
   weaknesses: string[];
   flags: string[];
+  sentimentDistribution: SentimentDistribution;
+  qualityDistribution: QualityDistribution;
+  turnsAnalyzed: number;
   behavioralObservations?: string[];
   suspectedReading?: boolean;
   behavior?: BehavioralAnalysis | null;

@@ -7,6 +7,7 @@ import type {
   Report2Input,
 } from './index';
 import type { DimensionScores, Report1Payload, Report2Payload } from '../../types';
+import { computeQualityDistribution, computeSentimentFallback } from '../interview/analytics';
 
 /**
  * Mock determinista de leIA. Usa heurísticas sobre el transcript:
@@ -203,6 +204,7 @@ export class MockLeia implements LeiaService {
 
     if (input.evaluations.length === 0) {
       return {
+        executiveSummary: 'No se obtuvo ninguna respuesta evaluable del candidato durante la entrevista.',
         scoreTotal: 0,
         dimensions: emptyDims(),
         stackScores: Object.fromEntries(input.job.requirements.stack.map((s) => [s, 0])),
@@ -210,6 +212,9 @@ export class MockLeia implements LeiaService {
         strengths: [],
         weaknesses: ['No hay evaluaciones registradas'],
         flags: ['sin_datos'],
+        sentimentDistribution: { positive: 0, neutral: 0, negative: 0, notApplicable: 0 },
+        qualityDistribution: { excellent: 0, good: 0, fair: 0, poor: 0 },
+        turnsAnalyzed: 0,
         recomendacion: 'descartar',
         recomendacionReason: 'No se obtuvo respuesta evaluable del candidato.',
       };
@@ -298,7 +303,14 @@ export class MockLeia implements LeiaService {
       }
     }
 
+    const turnSignals = input.evaluations.map((e) => ({
+      score: e.score,
+      transcript: e.transcript,
+      flags: e.flags,
+    }));
+
     return {
+      executiveSummary: recomendacionReason,
       scoreTotal,
       dimensions,
       stackScores,
@@ -306,6 +318,9 @@ export class MockLeia implements LeiaService {
       strengths,
       weaknesses,
       flags: allFlags,
+      sentimentDistribution: computeSentimentFallback(turnSignals),
+      qualityDistribution: computeQualityDistribution(turnSignals),
+      turnsAnalyzed: turnSignals.length,
       behavioralObservations,
       suspectedReading,
       behavior: input.behavior ?? null,

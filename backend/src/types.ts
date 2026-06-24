@@ -172,6 +172,12 @@ export type ReportKind = 1 | 2;
 export interface Report1Payload {
   summary: string;
   highlights: string[];
+  /** Momentos destacados de la conversación (citas o anécdotas concretas). */
+  keyMoments?: string[];
+  /** Temas / áreas que se llegaron a cubrir en la entrevista. */
+  topicsCovered?: string[];
+  /** Puntos de atención o señales que conviene revisar. */
+  concerns?: string[];
   /** Observaciones sobre el comportamiento del candidato (lenguaje no verbal, atención). */
   behavioralObservations?: string[];
   /** Resumen del análisis por cámara, si estuvo disponible. */
@@ -185,7 +191,25 @@ export interface Report1Payload {
   language: string;
 }
 
+/** Distribución de sentimiento del candidato a lo largo de la entrevista (%). */
+export interface SentimentDistribution {
+  positive: number;
+  neutral: number;
+  negative: number;
+  notApplicable: number;
+}
+
+/** Distribución de calidad de las respuestas del candidato (%). */
+export interface QualityDistribution {
+  excellent: number;
+  good: number;
+  fair: number;
+  poor: number;
+}
+
 export interface Report2Payload {
+  /** Resumen ejecutivo prolijo, 4-6 oraciones, lo primero que lee un reclutador. */
+  executiveSummary: string;
   scoreTotal: number;
   dimensions: DimensionScores;
   stackScores: Record<string, number>;
@@ -193,6 +217,12 @@ export interface Report2Payload {
   strengths: string[];
   weaknesses: string[];
   flags: string[];
+  /** Analítica tipo dashboard: sentimiento del candidato por respuesta (%). */
+  sentimentDistribution: SentimentDistribution;
+  /** Analítica tipo dashboard: calidad de las respuestas (%). */
+  qualityDistribution: QualityDistribution;
+  /** Cantidad de respuestas (turnos) analizadas para las analíticas. */
+  turnsAnalyzed: number;
   /** Observaciones de comportamiento que afectaron la evaluación. */
   behavioralObservations?: string[];
   /** Bandera: ¿hubo sospecha de lectura asistida durante la entrevista? */

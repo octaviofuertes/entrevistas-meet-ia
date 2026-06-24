@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { Layout } from '@/components/Layout';
 import { ScoreBar, ScoreCircle } from '@/components/ScoreBar';
 import { RecommendationBadge } from '@/components/StatusBadge';
+import { AnalyticsDonut } from '@/components/AnalyticsDonut';
 import { apiGetReport } from '@/lib/api';
 import { DIMENSION_LABELS } from '@/lib/types';
 import type { Report, Report2Payload, Candidate, Job, Interview } from '@/lib/types';
@@ -49,6 +50,40 @@ export default function Informe2Page() {
         </div>
         <Link href={`/entrevistas/${id}/informe-1`} className="btn-secondary">Ver Informe 1</Link>
       </header>
+
+      {p.executiveSummary && (
+        <section className="card mb-6">
+          <h2 className="text-lg font-semibold mb-2">Resumen ejecutivo</h2>
+          <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-line">
+            {p.executiveSummary}
+          </p>
+        </section>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+        <AnalyticsDonut
+          eyebrow="Candidato"
+          title="Análisis de sentimiento"
+          footnote={analyticsFootnote(p.turnsAnalyzed, meta.interview)}
+          segments={[
+            { label: 'Positivo', value: p.sentimentDistribution?.positive ?? 0, color: '#22c55e' },
+            { label: 'Neutral', value: p.sentimentDistribution?.neutral ?? 0, color: '#facc15' },
+            { label: 'Negativo', value: p.sentimentDistribution?.negative ?? 0, color: '#ef4444' },
+            { label: 'No aplica', value: p.sentimentDistribution?.notApplicable ?? 0, color: '#cbd5e1' },
+          ]}
+        />
+        <AnalyticsDonut
+          eyebrow="Candidato"
+          title="Calidad de las respuestas"
+          footnote={analyticsFootnote(p.turnsAnalyzed, meta.interview)}
+          segments={[
+            { label: 'Excelente', value: p.qualityDistribution?.excellent ?? 0, color: '#15803d' },
+            { label: 'Bueno', value: p.qualityDistribution?.good ?? 0, color: '#86efac' },
+            { label: 'Regular', value: p.qualityDistribution?.fair ?? 0, color: '#f59e0b' },
+            { label: 'Pobre', value: p.qualityDistribution?.poor ?? 0, color: '#ef4444' },
+          ]}
+        />
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="card flex flex-col items-center justify-center">
@@ -155,4 +190,13 @@ function Metric({ label, value }: { label: string; value: string }) {
 function pct(part: number, total: number): number {
   if (!total) return 0;
   return Math.round((part / total) * 100);
+}
+
+function analyticsFootnote(turns: number, interview?: Interview | null): string {
+  const n = turns ?? 0;
+  const fmt = (d?: string | null) => (d ? new Date(d).toLocaleDateString('es-AR') : null);
+  const start = fmt(interview?.startedAt);
+  const end = fmt(interview?.endedAt) ?? fmt(interview?.startedAt);
+  const base = `Calculado sobre ${n} ${n === 1 ? 'respuesta' : 'respuestas'}`;
+  return start ? `${base} · ${start}${end && end !== start ? ` a ${end}` : ''}` : base;
 }

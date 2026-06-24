@@ -164,7 +164,7 @@ Devolvé SOLO el texto a decir, sin comillas ni metadatos.`;
           durationSec: input.durationSec,
           behavior: input.behavior ?? null,
         }),
-        maxTokens: 1600,
+        maxTokens: 2400,
         temperature: 0.3,
         json: true,
       });
@@ -172,6 +172,9 @@ Devolvé SOLO el texto a decir, sin comillas ni metadatos.`;
       return {
         summary: parsed.summary,
         highlights: parsed.highlights,
+        keyMoments: parsed.keyMoments,
+        topicsCovered: parsed.topicsCovered,
+        concerns: parsed.concerns,
         behavioralObservations: parsed.behavioralObservations,
         behavior: input.behavior ?? null,
         fullTranscript: input.fullTranscript.map((t) => ({
@@ -204,7 +207,7 @@ Devolvé SOLO el texto a decir, sin comillas ni metadatos.`;
           })),
           behavior: input.behavior ?? null,
         }),
-        maxTokens: 1700,
+        maxTokens: 2400,
         temperature: 0.3,
         json: true,
       });
@@ -338,14 +341,23 @@ function parseEvaluate(text: string): EvaluateOutput {
 
 function parseReport1(
   text: string
-): { summary: string; highlights: string[]; behavioralObservations: string[] } {
+): {
+  summary: string;
+  highlights: string[];
+  keyMoments: string[];
+  topicsCovered: string[];
+  concerns: string[];
+  behavioralObservations: string[];
+} {
   const parsed = JSON.parse(extractJSON(text));
+  const arr = (v: unknown, n: number) => (Array.isArray(v) ? v.slice(0, n).map(String) : []);
   return {
     summary: String(parsed.summary ?? ''),
-    highlights: Array.isArray(parsed.highlights) ? parsed.highlights.slice(0, 12).map(String) : [],
-    behavioralObservations: Array.isArray(parsed.behavioralObservations)
-      ? parsed.behavioralObservations.slice(0, 10).map(String)
-      : [],
+    highlights: arr(parsed.highlights, 12),
+    keyMoments: arr(parsed.keyMoments, 8),
+    topicsCovered: arr(parsed.topicsCovered, 12),
+    concerns: arr(parsed.concerns, 8),
+    behavioralObservations: arr(parsed.behavioralObservations, 10),
   };
 }
 
@@ -369,6 +381,7 @@ function parseReport2(text: string, stack: string[]): Report2Payload {
     ? parsed.recomendacion
     : 'segunda_instancia';
   return {
+    executiveSummary: String(parsed.executiveSummary ?? ''),
     scoreTotal: clamp10(parsed.scoreTotal ?? avg(dimensions)),
     dimensions,
     stackScores,
@@ -379,6 +392,10 @@ function parseReport2(text: string, stack: string[]): Report2Payload {
     strengths: Array.isArray(parsed.strengths) ? parsed.strengths.slice(0, 8).map(String) : [],
     weaknesses: Array.isArray(parsed.weaknesses) ? parsed.weaknesses.slice(0, 8).map(String) : [],
     flags: Array.isArray(parsed.flags) ? parsed.flags.slice(0, 12).map(String) : [],
+    sentimentDistribution: normalizeSentiment(parsed.sentimentDistribution),
+    // qualityDistribution y turnsAnalyzed los completa el engine (determinístico).
+    qualityDistribution: { excellent: 0, good: 0, fair: 0, poor: 0 },
+    turnsAnalyzed: 0,
     behavioralObservations: Array.isArray(parsed.behavioralObservations)
       ? parsed.behavioralObservations.slice(0, 8).map(String)
       : [],
@@ -386,6 +403,25 @@ function parseReport2(text: string, stack: string[]): Report2Payload {
     recomendacion: recom as Report2Payload['recomendacion'],
     recomendacionReason: String(parsed.recomendacionReason ?? ''),
   };
+}
+
+/** Normaliza un objeto de sentimiento a porcentajes enteros que suman 100. */
+function normalizeSentiment(raw: any): { positive: number; neutral: number; negative: number; notApplicable: number } {
+  const p = Math.max(0, Number(raw?.positive) || 0);
+  const n = Math.max(0, Number(raw?.neutral) || 0);
+  const g = Math.max(0, Number(raw?.negative) || 0);
+  const na = Math.max(0, Number(raw?.notApplicable) || 0);
+  const total = p + n + g + na;
+  if (total <= 0) return { positive: 0, neutral: 0, negative: 0, notApplicable: 0 };
+  const round = (x: number) => Math.round((x / total) * 100);
+  const out = { positive: round(p), neutral: round(n), negative: round(g), notApplicable: round(na) };
+  // Ajuste de redondeo para que sumen exactamente 100.
+  const diff = 100 - (out.positive + out.neutral + out.negative + out.notApplicable);
+  if (diff !== 0) {
+    const maxKey = (Object.keys(out) as Array<keyof typeof out>).reduce((a, b) => (out[a] >= out[b] ? a : b));
+    out[maxKey] += diff;
+  }
+  return out;
 }
 
 function avg(d: DimensionScores): number {

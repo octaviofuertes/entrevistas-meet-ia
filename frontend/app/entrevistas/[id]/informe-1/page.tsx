@@ -61,6 +61,37 @@ export default function Informe1Page() {
             </ul>
           </section>
 
+          {p.keyMoments && p.keyMoments.length > 0 && (
+            <section className="card">
+              <h2 className="text-lg font-semibold mb-2">Momentos clave</h2>
+              <ul className="text-sm list-disc list-inside text-slate-700 space-y-1">
+                {p.keyMoments.map((m, i) => <li key={i}>{m}</li>)}
+              </ul>
+            </section>
+          )}
+
+          {p.topicsCovered && p.topicsCovered.length > 0 && (
+            <section className="card">
+              <h2 className="text-lg font-semibold mb-2">Temas cubiertos</h2>
+              <div className="flex flex-wrap gap-2">
+                {p.topicsCovered.map((t, i) => (
+                  <span key={i} className="text-xs bg-primary-50 text-primary-700 px-2 py-1 rounded-full">
+                    {t}
+                  </span>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {p.concerns && p.concerns.length > 0 && (
+            <section className="card border-amber-200 bg-amber-50">
+              <h2 className="text-lg font-semibold mb-2 text-amber-800">Puntos de atención</h2>
+              <ul className="text-sm list-disc list-inside text-amber-900 space-y-1">
+                {p.concerns.map((c, i) => <li key={i}>{c}</li>)}
+              </ul>
+            </section>
+          )}
+
           {((p.behavioralObservations && p.behavioralObservations.length > 0) || p.behavior) && (
             <section className="card">
               <h2 className="text-lg font-semibold mb-2">Lo que observamos en cámara</h2>

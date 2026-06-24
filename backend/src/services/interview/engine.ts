@@ -14,6 +14,7 @@ import type {
 import { getLeia } from '../leia';
 import { getTTS, type TTSService } from '../tts';
 import { getRecall } from '../recall';
+import { computeQualityDistribution, computeSentimentFallback, isEmptySentiment } from './analytics';
 
 /**
  * InterviewEngine: orquesta el ciclo de una entrevista v2.
@@ -524,6 +525,23 @@ export class InterviewEngine {
         evaluations: evalForLeia,
         behavior,
       });
+
+      // Analíticas determinísticas (no las dejamos al criterio del LLM):
+      // - qualityDistribution y turnsAnalyzed se calculan SIEMPRE desde los
+      //   scores reales por turno.
+      // - sentimentDistribution: si el LLM no devolvió una válida, caemos a la
+      //   derivada de señales objetivas.
+      const turnSignals = evalForLeia.map((e) => ({
+        score: e.score,
+        transcript: e.transcript,
+        flags: e.flags,
+      }));
+      payload2.qualityDistribution = computeQualityDistribution(turnSignals);
+      payload2.turnsAnalyzed = turnSignals.length;
+      if (isEmptySentiment(payload2.sentimentDistribution)) {
+        payload2.sentimentDistribution = computeSentimentFallback(turnSignals);
+      }
+
       report2 = await this.db.createReport({
         id: uuid(),
         interviewId: this.interviewId,

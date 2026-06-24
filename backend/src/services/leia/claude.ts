@@ -299,6 +299,7 @@ function parseReport2(text: string, stack: string[]): Report2Payload {
     ? parsed.recomendacion
     : 'segunda_instancia';
   return {
+    executiveSummary: String(parsed.executiveSummary ?? ''),
     scoreTotal: clamp10(parsed.scoreTotal ?? avg(dimensions)),
     dimensions,
     stackScores,
@@ -313,6 +314,14 @@ function parseReport2(text: string, stack: string[]): Report2Payload {
     strengths: Array.isArray(parsed.strengths) ? parsed.strengths.slice(0, 8).map(String) : [],
     weaknesses: Array.isArray(parsed.weaknesses) ? parsed.weaknesses.slice(0, 8).map(String) : [],
     flags: Array.isArray(parsed.flags) ? parsed.flags.slice(0, 12).map(String) : [],
+    sentimentDistribution: {
+      positive: Math.max(0, Number(parsed.sentimentDistribution?.positive) || 0),
+      neutral: Math.max(0, Number(parsed.sentimentDistribution?.neutral) || 0),
+      negative: Math.max(0, Number(parsed.sentimentDistribution?.negative) || 0),
+      notApplicable: Math.max(0, Number(parsed.sentimentDistribution?.notApplicable) || 0),
+    },
+    qualityDistribution: { excellent: 0, good: 0, fair: 0, poor: 0 },
+    turnsAnalyzed: 0,
     behavioralObservations: Array.isArray(parsed.behavioralObservations)
       ? parsed.behavioralObservations.slice(0, 8).map(String)
       : [],

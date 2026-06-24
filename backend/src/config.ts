@@ -1,5 +1,10 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import { z } from 'zod';
+
+// override:true → el .env SIEMPRE gana sobre variables ya presentes en el
+// entorno del shell. Sin esto, una var stale exportada vacía (ej:
+// PUBLIC_BASE_URL='') envenena la config y dotenv no la corrige.
+dotenv.config({ override: true });
 
 const ConfigSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
