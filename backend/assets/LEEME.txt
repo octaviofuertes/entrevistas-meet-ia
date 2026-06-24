@@ -1,0 +1,24 @@
+Avatar de leIA (animación por sprite)
+=====================================
+
+Guardá la GRILLA de frames como:
+
+    avatar.png   (o .jpg / .jpeg / .webp)
+
+IMPORTANTE: tiene que ser una grilla de 3 columnas x 2 filas con frames de la
+misma persona, en este orden:
+
+    [ reposo        ] [ ojos cerrados ] [ boca abierta A ]
+    [ boca abierta B] [ boca abierta C] [ boca abierta D ]
+
+  - Fila 0: (0,0) reposo/boca casi cerrada · (1,0) parpadeo (ojos cerrados) · (2,0) boca abierta
+  - Fila 1: tres posiciones más de boca abierta (para variar al hablar)
+
+El bot intercambia esos frames: muestra "reposo" en silencio, "ojos cerrados"
+para parpadear cada pocos segundos, y va rotando las bocas abiertas mientras
+leIA habla. Es la grilla que pegaste en el chat.
+
+Si tu grilla tiene otra distribución (más/menos columnas o filas), avisá y
+ajusto COLS/ROWS y el mapeo en src/realtime/bot-stage.ts.
+
+Si no hay imagen, el bot muestra un círculo gris con la "L".

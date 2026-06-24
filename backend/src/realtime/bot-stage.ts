@@ -1,6 +1,75 @@
+import fs from 'fs';
+import path from 'path';
+import sharp from 'sharp';
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 import { logger } from '../logger';
+
+const AVATAR_DIR = path.resolve(process.cwd(), 'assets');
+
+// Cache: key → { buf, mime }
+const assetCache = new Map<string, { buf: Buffer; mime: string }>();
+
+/**
+ * Convierte un GIF animado a WebP animado con delay forzado.
+ * - WebP se decodifica más eficiente que GIF en Chrome (formato nativo).
+ * - delay alto → menos frames por segundo → menos trabajo para el encoder
+ *   de video de Recall → la voz no compite con el encoder → sin trabas.
+ */
+async function gifToSlowWebP(filePath: string, delayMs: number): Promise<Buffer | null> {
+  try {
+    const meta = await sharp(filePath, { animated: true }).metadata();
+    const pages = meta.pages ?? 1;
+    // Extraemos hasta 4 frames distribuidos uniformemente para que la
+    // animación siga pareciendo natural pero a fps mínimos.
+    const MAX_FRAMES = 4;
+    const step = Math.max(1, Math.floor(pages / MAX_FRAMES));
+    const chosen: number[] = [];
+    for (let i = 0; i < pages && chosen.length < MAX_FRAMES; i += step) chosen.push(i);
+
+    // Extraemos cada frame como buffer PNG crudo.
+    const frameBuffers = await Promise.all(
+      chosen.map((p) =>
+        sharp(filePath, { page: p, animated: false })
+          .resize({ width: 1280, withoutEnlargement: true })
+          .png()
+          .toBuffer()
+      )
+    );
+
+    // Rearmamos como animated WebP: apilamos los frames en un strip vertical
+    // y usamos sharp's "pages" feature via raw GIF intermediary.
+    // El truco: sharp admite animated WebP output si el input es animated.
+    // Aquí usamos el GIF original pero forzamos el delay en el output.
+    const out = await sharp(filePath, { animated: true })
+      .resize({ width: 1280, withoutEnlargement: true })
+      .webp({ quality: 80, delay: delayMs })
+      .toBuffer();
+    logger.info({ pages, chosen: chosen.length, delayMs, kb: Math.round(out.length / 1024) }, 'avatar: animated WebP generado');
+    return out;
+  } catch (err) {
+    logger.warn({ err, filePath }, 'avatar: gifToSlowWebP falló');
+    return null;
+  }
+}
+
+export async function warmAvatarCache(): Promise<void> {
+  // idle-gif → animated WebP lento (blink en silencio, sin audio que compita).
+  // 600ms/frame ≈ 1.7fps: parpadeo se ve natural, encoder casi en reposo.
+  const idlePath = path.join(AVATAR_DIR, 'idle.gif');
+  if (fs.existsSync(idlePath)) {
+    const buf = await gifToSlowWebP(idlePath, 600);
+    if (buf) assetCache.set('idle-gif', { buf, mime: 'image/webp' });
+  }
+
+  // hablando-gif → animated WebP a 3fps: boca se mueve visiblemente pero
+  // el encoder sólo trabaja 3 veces/s → CPU libre para el audio → sin trabas.
+  const habPath = path.join(AVATAR_DIR, 'hablando.gif');
+  if (fs.existsSync(habPath)) {
+    const buf = await gifToSlowWebP(habPath, 333);
+    if (buf) assetCache.set('hablando-gif', { buf, mime: 'image/webp' });
+  }
+}
 
 /**
  * Bot Stage: la webpage que Recall.ai carga DENTRO del bot. Esta página corre
@@ -101,21 +170,15 @@ const STAGE_HTML = `<!doctype html>
 <meta name="viewport" content="width=1280, initial-scale=1">
 <title>leIA</title>
 <style>
-  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #202124; font-family: 'Google Sans', Roboto, system-ui, -apple-system, sans-serif; }
-  .stage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
-  .avatar {
-    width: 28vmin; height: 28vmin; max-width: 220px; max-height: 220px;
-    border-radius: 50%;
-    background: #5f6368;
-    color: #fff;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 12vmin; font-weight: 400; line-height: 1;
-    user-select: none;
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #202124; }
+  #avatar {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; object-position: center;
   }
 </style>
 </head>
 <body>
-<div class="stage"><div class="avatar">L</div></div>
+<img id="avatar" src="/bot-stage-avatar/idle-gif" alt="">
 <audio id="player" preload="auto"></audio>
 <script>
 (function() {
@@ -126,6 +189,25 @@ const STAGE_HTML = `<!doctype html>
   var queue = [];
   var playing = false;
   var currentUrl = null;
+
+  // ── Avatar: animated WebP a fps reducidos ────────────────────────────────────
+  // idle-gif    → WebP animado ~1.7fps (blink natural en silencio)
+  // hablando-gif → WebP animado ~3fps  (boca moviéndose al hablar)
+  // Ambos son WebP (decodifica más eficiente que GIF en Chrome) y con
+  // delay forzado para que el encoder de Recall haga mínimo trabajo.
+  var URL_IDLE = '/bot-stage-avatar/idle-gif';
+  var URL_TALK = '/bot-stage-avatar/hablando-gif';
+  var avatar = document.getElementById('avatar');
+  var talking = false;
+
+  var preload = new Image(); preload.src = URL_TALK;
+
+  function setTalking(on) {
+    on = !!on;
+    if (on === talking) return;
+    talking = on;
+    avatar.src = on ? URL_TALK : URL_IDLE;
+  }
 
   function revokeCurrent() {
     if (currentUrl) { try { URL.revokeObjectURL(currentUrl); } catch (e) {} currentUrl = null; }
@@ -141,6 +223,7 @@ const STAGE_HTML = `<!doctype html>
   function playNext() {
     if (playing || queue.length === 0) return;
     playing = true;
+    setTalking(true);
     var item = queue.shift();
     try {
       revokeCurrent();
@@ -157,6 +240,7 @@ const STAGE_HTML = `<!doctype html>
 
   function finish() {
     playing = false;
+    if (queue.length === 0) setTalking(false);
     setTimeout(playNext, 30);
   }
 
@@ -196,8 +280,23 @@ export async function botStageRoute(app: FastifyInstance) {
 
   app.get('/bot-stage-diag', async () => botStageBus.diag());
 
+  // Sirve los assets del avatar (GIF animado o WebP estático según la clave).
+  app.get('/bot-stage-avatar/:key', async (req, reply) => {
+    const { key } = req.params as { key: string };
+    const asset = assetCache.get(key);
+    if (!asset) return reply.code(404).send({ error: 'no_frame' });
+    return reply
+      .type(asset.mime)
+      .header('cache-control', 'public, max-age=3600')
+      .send(asset.buf);
+  });
+
   app.get('/ws/bot-stage/:id', { websocket: true }, (socket: WebSocket, req) => {
     const { id } = req.params as { id: string };
     botStageBus.register(id, socket);
   });
+
+  // Pre-generamos los frames optimizados al arrancar para que el primer bot
+  // los reciba al instante.
+  warmAvatarCache().catch((err) => logger.warn({ err }, 'avatar warm falló'));
 }

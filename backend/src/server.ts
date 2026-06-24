@@ -58,6 +58,7 @@ async function buildServer() {
     if (url.startsWith('/webhooks/')) return;
     if (url.startsWith('/bot-stage/')) return;
     if (url.startsWith('/bot-stage-diag')) return;
+    if (url.startsWith('/bot-stage-avatar')) return;
 
     const auth = req.headers.authorization;
     if (auth !== `Bearer ${config.ADMIN_TOKEN}`) {
