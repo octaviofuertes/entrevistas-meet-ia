@@ -66,6 +66,7 @@ export class RealRecall implements RecallService {
               'transcript.partial_data',
               'participant_events.speech_on',
               'participant_events.speech_off',
+              'participant_events.leave',
             ],
           },
         ],
@@ -202,6 +203,17 @@ export class RealRecall implements RecallService {
           endMs: toMs(lastWord?.end_timestamp?.relative) ?? Date.now(),
           isFinal,
         },
+      });
+      return;
+    }
+
+    // -------- Participante se va (cierra el Meet) → finalizamos solos --------
+    if (evt === 'participant_events.leave') {
+      const inner = data.data ?? data;
+      const speaker = classifySpeaker(inner.participant);
+      this.events.emit('event', {
+        type: 'participant_left',
+        payload: { interviewId, botId, speaker },
       });
       return;
     }

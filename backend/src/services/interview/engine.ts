@@ -47,6 +47,7 @@ export class InterviewEngine {
   private answerStartedAtMs = 0;
   private finished = false;
   private silenceTimer: NodeJS.Timeout | null = null;
+  private autoFinishTimer: NodeJS.Timeout | null = null;
   private committing = false;
   /** Hasta cuándo consideramos que leIA está hablando (para ignorar su eco). */
   private botSpeakingUntilMs = 0;
@@ -168,6 +169,7 @@ export class InterviewEngine {
     }
     this.finished = true;
     if (this.silenceTimer) clearTimeout(this.silenceTimer);
+    if (this.autoFinishTimer) clearTimeout(this.autoFinishTimer);
 
     const endMs = Date.now();
     const durationSec = Math.round((endMs - this.startedAtMs) / 1000);
@@ -277,6 +279,19 @@ export class InterviewEngine {
     if (this.silenceTimer) { clearTimeout(this.silenceTimer); this.silenceTimer = null; }
   }
 
+  /**
+   * Finaliza la entrevista automáticamente (genera el informe) cuando el Meet
+   * termina o el candidato se va. Espera un toque por si fue una desconexión
+   * momentánea, y es idempotente (stop ya se protege con this.finished).
+   */
+  private autoFinish(reason: string) {
+    if (this.finished || this.autoFinishTimer) return;
+    logger.info({ interviewId: this.interviewId, reason }, 'auto-finalizando entrevista');
+    this.autoFinishTimer = setTimeout(() => {
+      this.stop('auto').catch((err) => logger.error({ err }, 'auto-finish: stop falló'));
+    }, AUTO_FINISH_DELAY_MS);
+  }
+
   /** (Re)arma el timer que dispara commitAnswer tras SILENCE_MS de silencio real. */
   private armSilenceTimer() {
     if (this.silenceTimer) clearTimeout(this.silenceTimer);
@@ -290,6 +305,19 @@ export class InterviewEngine {
 
     if (evt.type === 'lifecycle') {
       this.emit('lifecycle', evt.payload);
+      // Si Recall avisa que la llamada terminó, finalizamos y generamos el informe.
+      if (evt.payload.status === 'left' && !this.finished) {
+        this.autoFinish('lifecycle_left');
+      }
+      return;
+    }
+
+    // El candidato cerró el Meet → la entrevista terminó. Finalizamos solos
+    // (sin que el reclutador tenga que apretar "Finalizar").
+    if (evt.type === 'participant_left') {
+      if (evt.payload.speaker !== 'bot' && !this.finished) {
+        this.autoFinish('candidate_left');
+      }
       return;
     }
 
@@ -572,6 +600,7 @@ export class InterviewEngine {
       this.recall.events.off('event', this.boundRecallHandler);
     } catch { /* noop */ }
     if (this.silenceTimer) clearTimeout(this.silenceTimer);
+    if (this.autoFinishTimer) clearTimeout(this.autoFinishTimer);
   }
 }
 
@@ -582,6 +611,8 @@ export class InterviewEngine {
 const SILENCE_MS = 700;
 /** Margen extra tras la voz de leIA durante el cual ignoramos el micro (eco). */
 const BOT_ECHO_TAIL_MS = 500;
+/** Espera tras detectar fin de llamada antes de finalizar (por si reconecta). */
+const AUTO_FINISH_DELAY_MS = 4000;
 
 // ============================================================
 // Registry para mantener engines activos por interview

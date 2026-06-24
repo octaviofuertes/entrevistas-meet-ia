@@ -114,7 +114,7 @@ export default function EntrevistasPage() {
                       )}
                       {iv.status === 'completada' && (
                         <Link
-                          href={`/entrevistas/${iv.id}/informe-2`}
+                          href={`/entrevistas/${iv.id}/informe`}
                           className="text-blue-600 hover:underline mr-3"
                         >
                           Informe 2

@@ -170,10 +170,10 @@ export default function Dashboard() {
                       </td>
                       <td className="py-3 text-right">
                         <Link
-                          href={`/entrevistas/${r.interview.id}/informe-2`}
+                          href={`/entrevistas/${r.interview.id}/informe`}
                           className="text-primary-600 hover:underline text-sm font-medium"
                         >
-                          Informe 2 →
+                          Ver informe →
                         </Link>
                       </td>
                     </tr>

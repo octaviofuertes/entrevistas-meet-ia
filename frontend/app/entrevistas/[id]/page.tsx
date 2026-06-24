@@ -6,7 +6,6 @@ import Link from 'next/link';
 import { Layout } from '@/components/Layout';
 import { StatusBadge } from '@/components/StatusBadge';
 import {
-  apiFinalizeInterview,
   apiGetInterview,
   apiStartInterview,
   apiUpdateInterviewTTS,
@@ -82,16 +81,6 @@ export default function EntrevistaDetallePage() {
     }
   }
 
-  async function onFinalize() {
-    if (!confirm('Cerrar la entrevista y generar los informes?')) return;
-    try {
-      await apiFinalizeInterview(params.id);
-      await load();
-    } catch (e: any) {
-      alert(e.message);
-    }
-  }
-
   if (loading) return <Layout><p className="text-slate-500">Cargando...</p></Layout>;
   if (error || !data) return <Layout><p className="text-red-600">{error ?? 'No encontrada'}</p></Layout>;
 
@@ -126,17 +115,9 @@ export default function EntrevistaDetallePage() {
             {data.status === 'en_curso' && (
               <button onClick={load} className="btn-secondary">Refrescar</button>
             )}
-            {data.status === 'en_curso' && (
-              <button onClick={onFinalize} className="btn-secondary">Finalizar</button>
-            )}
-            {hasR1 && (
-              <Link href={`/entrevistas/${data.id}/informe-1`} className="btn-secondary">
-                Informe 1
-              </Link>
-            )}
-            {hasR2 && (
-              <Link href={`/entrevistas/${data.id}/informe-2`} className="btn-primary">
-                Informe 2
+            {(hasR1 || hasR2) && (
+              <Link href={`/entrevistas/${data.id}/informe`} className="btn-primary">
+                Ver informe
               </Link>
             )}
           </div>
