@@ -13,6 +13,7 @@ import { leiaRoutes } from './routes/leia';
 import { interviewWsRoute } from './realtime/interview-ws';
 import { recallWebhookRoute } from './realtime/recall-webhook';
 import { botStageRoute } from './realtime/bot-stage';
+import { browserSalaRoute } from './realtime/browser-sala';
 
 async function buildServer() {
   const app = Fastify({
@@ -60,6 +61,7 @@ async function buildServer() {
     if (url.startsWith('/bot-stage-diag')) return;
     if (url.startsWith('/bot-stage-avatar')) return;
     if (url.startsWith('/bot-stage-video')) return;
+    if (url.startsWith('/api/sala/')) return;
 
     const auth = req.headers.authorization;
     if (auth !== `Bearer ${config.ADMIN_TOKEN}`) {
@@ -75,6 +77,7 @@ async function buildServer() {
   await app.register(interviewWsRoute);
   await app.register(recallWebhookRoute);
   await app.register(botStageRoute);
+  await app.register(browserSalaRoute);
 
   await getDb();
   return app;

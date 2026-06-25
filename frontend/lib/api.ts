@@ -105,7 +105,8 @@ export const apiGetInterview = (id: string) =>
 export const apiCreateInterview = (data: {
   jobId: string;
   candidateId: string;
-  meetUrl: string;
+  meetUrl?: string;
+  mode?: 'meet' | 'browser';
   scheduledAt?: string;
   ttsDriver?: TTSDriver;
 }) =>

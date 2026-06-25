@@ -2,6 +2,7 @@ import { config } from '../../config';
 import { logger } from '../../logger';
 import { MockRecall } from './mock';
 import { RealRecall } from './real';
+import { getBrowserRecall } from './browser';
 import { EventEmitter } from 'events';
 
 export interface CaptionEvent {
@@ -67,22 +68,26 @@ export interface RecallService {
   simulateCandidateAnswer?(interviewId: string, text: string): Promise<void>;
 }
 
-let instance: RecallService | null = null;
+let meetInstance: RecallService | null = null;
 
+/** Devuelve el driver de recall para entrevistas con Google Meet. */
 export function getRecall(): RecallService {
-  if (instance) return instance;
+  if (meetInstance) return meetInstance;
 
   if (config.RECALL_DRIVER === 'recall') {
     if (!config.RECALL_API_KEY) {
       logger.warn('RECALL_DRIVER=recall pero RECALL_API_KEY vacío. Usando mock como fallback.');
-      instance = new MockRecall();
+      meetInstance = new MockRecall();
     } else {
       logger.info({ region: config.RECALL_REGION }, 'Recall.ai inicializado');
-      instance = new RealRecall();
+      meetInstance = new RealRecall();
     }
   } else {
     logger.info('Recall.ai en modo mock');
-    instance = new MockRecall();
+    meetInstance = new MockRecall();
   }
-  return instance;
+  return meetInstance;
 }
+
+/** Devuelve el driver browser para una entrevista específica (sala nativa). */
+export { getBrowserRecall } from './browser';

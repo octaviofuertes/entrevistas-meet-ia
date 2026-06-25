@@ -13,7 +13,8 @@ import type {
 } from '../../types';
 import { getLeia } from '../leia';
 import { getTTS, type TTSService, type TTSResult } from '../tts';
-import { getRecall } from '../recall';
+import { getRecall, getBrowserRecall } from '../recall';
+import type { RecallService } from '../recall';
 import { computeQualityDistribution, computeSentimentFallback, isEmptySentiment } from './analytics';
 
 /**
@@ -51,7 +52,7 @@ export class InterviewEngine {
   private committing = false;
   /** Hasta cuándo consideramos que leIA está hablando (para ignorar su eco). */
   private botSpeakingUntilMs = 0;
-  private recall = getRecall();
+  private recall: RecallService = getRecall();
   private leia = getLeia();
   private tts: TTSService = getTTS();
   private boundRecallHandler: (evt: any) => void = () => {};
@@ -71,6 +72,8 @@ export class InterviewEngine {
     if (!iv) throw new Error('Entrevista no encontrada');
     this.interview = iv;
     this.tts = getTTS(iv.ttsDriver ?? undefined);
+    // Recall driver: browser (sala nativa) o meet (Recall.ai / mock)
+    this.recall = iv.mode === 'browser' ? getBrowserRecall(this.interviewId) : getRecall();
 
     const job = await this.db.getJob(iv.jobId);
     if (!job) throw new Error('Puesto no encontrado');
@@ -600,6 +603,17 @@ export class InterviewEngine {
 
   private emit(type: string, payload: unknown) {
     this.events.emit('event', { type, payload });
+    // En modo browser, reenviar eventos clave al frontend del candidato
+    if (this.interview?.mode === 'browser') {
+      const br = getBrowserRecall(this.interviewId);
+      if (type === 'question_generated') {
+        const p = payload as any;
+        br.forwardQuestion(p.question, p.index, !!p.isClosing);
+      } else if (type === 'interview_status') {
+        const p = payload as any;
+        br.forwardStatus(p.status, p.reason);
+      }
+    }
   }
 
   /**

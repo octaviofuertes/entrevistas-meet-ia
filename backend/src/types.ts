@@ -87,11 +87,14 @@ export type InterviewStatus =
   | 'cancelada'
   | 'error';
 
+export type InterviewMode = 'meet' | 'browser';
+
 export interface Interview {
   id: UUID;
   jobId: UUID;
   candidateId: UUID;
   status: InterviewStatus;
+  mode?: InterviewMode | null;
   meetUrl: string;
   ttsDriver?: TTSDriver | null;
   recallBotId?: string | null;

@@ -4,17 +4,23 @@ import { z } from 'zod';
 import { config } from '../config';
 import { getDb } from '../db';
 import { getEngine, disposeEngine } from '../services/interview/engine';
-import type { Interview, TTSDriver } from '../types';
+import type { Interview, InterviewMode, TTSDriver } from '../types';
 
 const InterviewTtsDriverSchema = z.enum(['gemini', 'edge']);
 
-const CreateInterviewSchema = z.object({
-  jobId: z.string().uuid(),
-  candidateId: z.string().uuid(),
-  meetUrl: z.string().url(),
-  scheduledAt: z.string().datetime().optional(),
-  ttsDriver: InterviewTtsDriverSchema.optional(),
-});
+const CreateInterviewSchema = z
+  .object({
+    mode: z.enum(['meet', 'browser']).optional().default('meet'),
+    jobId: z.string().uuid(),
+    candidateId: z.string().uuid(),
+    meetUrl: z.string().optional().default(''),
+    scheduledAt: z.string().datetime().optional(),
+    ttsDriver: InterviewTtsDriverSchema.optional(),
+  })
+  .refine(
+    (d) => d.mode !== 'meet' || (d.meetUrl ?? '').startsWith('https://meet.google.com/'),
+    { message: 'meetUrl inválido para modo meet', path: ['meetUrl'] }
+  );
 
 const UpdateInterviewTtsSchema = z.object({
   ttsDriver: InterviewTtsDriverSchema,
@@ -74,12 +80,14 @@ export async function interviewsRoutes(app: FastifyInstance) {
     if (!candidate) return reply.code(404).send({ error: 'candidate_not_found' });
 
     const now = new Date().toISOString();
+    const mode = (parsed.data.mode ?? 'meet') as InterviewMode;
     const interview: Interview = {
       id: uuid(),
       jobId: parsed.data.jobId,
       candidateId: parsed.data.candidateId,
       status: 'agendada',
-      meetUrl: parsed.data.meetUrl,
+      mode,
+      meetUrl: parsed.data.meetUrl ?? '',
       ttsDriver: parsed.data.ttsDriver ?? defaultInterviewTtsDriver(),
       recallBotId: null,
       scheduledAt: parsed.data.scheduledAt ?? now,
