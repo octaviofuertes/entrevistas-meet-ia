@@ -288,16 +288,18 @@ export async function botStageRoute(app: FastifyInstance) {
       return reply
         .code(206)
         .type('video/mp4')
-        .header('content-range',  `bytes ${start}-${end}/${buf.length}`)
-        .header('accept-ranges',  'bytes')
-        .header('cache-control',  'public, max-age=3600')
+        .header('content-range',             `bytes ${start}-${end}/${buf.length}`)
+        .header('accept-ranges',             'bytes')
+        .header('cache-control',             'public, max-age=3600')
+        .header('access-control-allow-origin', '*')
         .send(chunk);
     }
 
     return reply
       .type('video/mp4')
-      .header('accept-ranges', 'bytes')
-      .header('cache-control', 'public, max-age=3600')
+      .header('accept-ranges',             'bytes')
+      .header('cache-control',             'public, max-age=3600')
+      .header('access-control-allow-origin', '*')
       .send(buf);
   });
 

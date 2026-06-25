@@ -508,12 +508,12 @@ export default function SalaPage() {
           transition: 'box-shadow 0.15s',
         }}>
           {/* Idle video */}
-          <video ref={idleRef} autoPlay loop muted playsInline
+          <video ref={idleRef} autoPlay loop muted playsInline crossOrigin="anonymous"
             style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}>
             <source src={`${API_URL}/bot-stage-video/idle`} type="video/mp4" />
           </video>
           {/* Talk video */}
-          <video ref={talkRef} loop muted playsInline
+          <video ref={talkRef} loop muted playsInline crossOrigin="anonymous"
             style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', display: 'none' }}>
             <source src={`${API_URL}/bot-stage-video/talk`} type="video/mp4" />
           </video>
