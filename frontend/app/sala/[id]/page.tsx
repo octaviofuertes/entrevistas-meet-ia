@@ -9,65 +9,91 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
 interface SalaInfo {
   interviewId: string;
-  status:        string;
-  jobTitle:      string;
-  company:       string;
+  status:       string;
+  jobTitle:     string;
+  company:      string;
   candidateName: string;
 }
 
 type Phase = 'loading' | 'lobby' | 'running' | 'finished' | 'error';
 
+function getSupportedMimeType(): string {
+  if (typeof MediaRecorder === 'undefined') return '';
+  const types = [
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm',
+    'video/mp4',
+  ];
+  return types.find(t => MediaRecorder.isTypeSupported(t)) ?? '';
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 export default function SalaPage() {
   const { id } = useParams<{ id: string }>();
 
-  const [info,    setInfo]    = useState<SalaInfo | null>(null);
-  const [phase,   setPhase]   = useState<Phase>('loading');
-  const [errMsg,  setErrMsg]  = useState('');
+  const [info,   setInfo]   = useState<SalaInfo | null>(null);
+  const [phase,  setPhase]  = useState<Phase>('loading');
+  const [errMsg, setErrMsg] = useState('');
 
-  // leIA video refs
+  // leIA video refs (always mounted during running)
   const idleRef = useRef<HTMLVideoElement>(null);
   const talkRef = useRef<HTMLVideoElement>(null);
 
-  // Candidate self-view
-  const selfRef = useRef<HTMLVideoElement>(null);
+  // Self-cam: lobby preview (unmounts) and running PiP (always mounted in running)
+  const lobbyVideoRef = useRef<HTMLVideoElement>(null);
+  const pipRef        = useRef<HTMLVideoElement>(null);
+
+  // Stream state — useEffect syncs it to whichever video is active
+  const [currentStream, setCurrentStream] = useState<MediaStream | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const lobbyStream = useRef<MediaStream | null>(null);
 
   // UI state
-  const [leiaSpeaking,  setLeiaSpeaking]  = useState(false);
-  const [leiaThinking,  setLeiaThinking]  = useState(false);
-  const [subtitle,      setSubtitle]      = useState('');
-  const [showCC,        setShowCC]        = useState(true);
-  const [micOn,         setMicOn]         = useState(true);
-  const [cameraOn,      setCameraOn]      = useState(true);
-  const [elapsed,       setElapsed]       = useState(0);
-  const [recording,     setRecording]     = useState(false);
+  const [leiaSpeaking, setLeiaSpeaking] = useState(false);
+  const [leiaThinking, setLeiaThinking] = useState(false);
+  const [subtitle,     setSubtitle]     = useState('');
+  const [showCC,       setShowCC]       = useState(true);
+  const [micOn,        setMicOn]        = useState(true);
+  const [cameraOn,     setCameraOn]     = useState(true);
+  const [elapsed,      setElapsed]      = useState(0);
+  const [recording,    setRecording]    = useState(false);
 
-  // Stable refs for reactive values used inside callbacks
+  // Stable refs
   const micOnRef    = useRef(micOn);
   const phaseRef    = useRef(phase);
-  useEffect(() => { micOnRef.current   = micOn;  }, [micOn]);
-  useEffect(() => { phaseRef.current   = phase;  }, [phase]);
+  const cameraOnRef = useRef(cameraOn);
+  useEffect(() => { micOnRef.current    = micOn;    }, [micOn]);
+  useEffect(() => { phaseRef.current    = phase;    }, [phase]);
+  useEffect(() => { cameraOnRef.current = cameraOn; }, [cameraOn]);
 
-  // Stream & recording
-  const streamRef   = useRef<MediaStream | null>(null);
-  const lobbyStream = useRef<MediaStream | null>(null);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef   = useRef<Blob[]>([]);
+  // Recording
+  const recorderRef  = useRef<MediaRecorder | null>(null);
+  const chunksRef    = useRef<Blob[]>([]);
+  const mimeTypeRef  = useRef('');
 
-  // WS
-  const wsRef = useRef<WebSocket | null>(null);
-
-  // Timer
+  // WS / timer
+  const wsRef    = useRef<WebSocket | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // AudioContext — created on user gesture to unlock autoplay
   const audioCtxRef = useRef<AudioContext | null>(null);
 
-  // Audio queue (processed sequentially via AudioContext)
+  // Audio queue
   const audioQueueRef = useRef<Array<{ mimeType: string; audioBase64: string }>>([]);
   const playingRef    = useRef(false);
 
-  // ── Voice recognition ──────────────────────────────────────────────────────
+  // ── Sync stream to active video element ───────────────────────────────────
+  useEffect(() => {
+    if (phase === 'lobby' && lobbyVideoRef.current) {
+      lobbyVideoRef.current.srcObject = currentStream;
+    }
+    if (phase === 'running' && pipRef.current) {
+      pipRef.current.srcObject = currentStream;
+    }
+  }, [currentStream, phase]);
+
+  // ── Voice recognition ─────────────────────────────────────────────────────
   const startListeningRef = useRef<() => void>(() => {});
   const stopListeningRef  = useRef<() => void>(() => {});
   const resetFinalRef     = useRef<() => void>(() => {});
@@ -93,14 +119,7 @@ export default function SalaPage() {
       .catch(e => { setErrMsg(e?.message ?? 'Error'); setPhase('error'); });
   }, [id]);
 
-  // ── Sync camera stream → video element ────────────────────────────────────
-  useEffect(() => {
-    if (selfRef.current && streamRef.current) {
-      selfRef.current.srcObject = streamRef.current;
-    }
-  }, [phase]);
-
-  // ── Lobby camera preview ───────────────────────────────────────────────────
+  // ── Lobby camera preview ──────────────────────────────────────────────────
   useEffect(() => {
     if (phase !== 'lobby') return;
     let alive = true;
@@ -109,7 +128,7 @@ export default function SalaPage() {
       .then(s => {
         if (!alive) { s.getTracks().forEach(t => t.stop()); return; }
         lobbyStream.current = s;
-        if (selfRef.current) selfRef.current.srcObject = s;
+        setCurrentStream(s);
       })
       .catch(() => {});
     return () => { alive = false; };
@@ -123,7 +142,7 @@ export default function SalaPage() {
     if (!queue.length || !ctx) {
       playingRef.current = false;
       setLeiaSpeaking(false);
-      // switch back to idle video
+      // switch to idle
       if (idleRef.current) { idleRef.current.style.display = 'block'; idleRef.current.play().catch(() => {}); }
       if (talkRef.current) { talkRef.current.style.display = 'none';  talkRef.current.pause(); }
       if (micOnRef.current) startListeningRef.current();
@@ -140,11 +159,10 @@ export default function SalaPage() {
     if (idleRef.current) { idleRef.current.style.display = 'none';  idleRef.current.pause(); }
     if (talkRef.current) { talkRef.current.style.display = 'block'; talkRef.current.currentTime = 0; talkRef.current.play().catch(() => {}); }
 
-    // Decode base64 → ArrayBuffer
     let arrayBuffer: ArrayBuffer;
     try {
       const bytes = atob(item.audioBase64);
-      const arr   = new Uint8Array(bytes.length);
+      const arr = new Uint8Array(bytes.length);
       for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
       arrayBuffer = arr.buffer;
     } catch {
@@ -152,7 +170,6 @@ export default function SalaPage() {
       return;
     }
 
-    // Decode & play via AudioContext
     ctx.decodeAudioData(
       arrayBuffer,
       (buffer) => {
@@ -162,9 +179,9 @@ export default function SalaPage() {
         source.onended = () => setTimeout(playNext, 40);
         source.start(0);
       },
-      () => setTimeout(playNext, 20), // decode error → try next
+      () => setTimeout(playNext, 20),
     );
-  }, []); // stable — reads everything from refs
+  }, []);
 
   const enqueueAudio = useCallback((mimeType: string, audioBase64: string) => {
     audioQueueRef.current.push({ mimeType, audioBase64 });
@@ -172,17 +189,15 @@ export default function SalaPage() {
     if (!playingRef.current) playNext();
   }, [playNext]);
 
-  // Stable ref so ws.onmessage never goes stale
   const enqueueRef = useRef(enqueueAudio);
   useEffect(() => { enqueueRef.current = enqueueAudio; }, [enqueueAudio]);
 
-  // ── Join call ──────────────────────────────────────────────────────────────
+  // ── Join call ─────────────────────────────────────────────────────────────
   const joinCall = useCallback(async () => {
-    // Stop lobby preview
     lobbyStream.current?.getTracks().forEach(t => t.stop());
     lobbyStream.current = null;
 
-    // *** Unlock AudioContext on this user gesture ***
+    // Unlock AudioContext on user gesture
     const ctx = new (window.AudioContext ?? (window as any).webkitAudioContext)() as AudioContext;
     if (ctx.state === 'suspended') await ctx.resume();
     audioCtxRef.current = ctx;
@@ -197,19 +212,22 @@ export default function SalaPage() {
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
       streamRef.current = stream;
-      stream.getVideoTracks().forEach(t => (t.enabled = cameraOn));
-      stream.getAudioTracks().forEach(t => (t.enabled  = micOn));
-      // Assign to video element (may be mounted by now or via useEffect above)
-      if (selfRef.current) selfRef.current.srcObject = stream;
+      stream.getVideoTracks().forEach(t => (t.enabled = cameraOnRef.current));
+      stream.getAudioTracks().forEach(t => (t.enabled  = micOnRef.current));
+      setCurrentStream(stream);
 
-      // Recording
-      try {
-        const mr = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9,opus' });
-        mr.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
-        mr.start(5000);
-        recorderRef.current = mr;
-        setRecording(true);
-      } catch { /* recording optional */ }
+      // Start recording
+      const mime = getSupportedMimeType();
+      mimeTypeRef.current = mime;
+      if (mime) {
+        try {
+          const mr = new MediaRecorder(stream, { mimeType: mime });
+          mr.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+          mr.start(3000);
+          recorderRef.current = mr;
+          setRecording(true);
+        } catch { /* recording optional */ }
+      }
     } catch { /* camera/mic optional */ }
 
     // Preload talk video
@@ -221,10 +239,7 @@ export default function SalaPage() {
     // WebSocket
     const ws = new WebSocket(`${WS_URL}/ws/sala/${id}`);
     wsRef.current = ws;
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'ready' }));
-      setLeiaThinking(true);
-    };
+    ws.onopen = () => { ws.send(JSON.stringify({ type: 'ready' })); setLeiaThinking(true); };
     ws.onmessage = ev => {
       try {
         const msg = JSON.parse(ev.data as string);
@@ -234,64 +249,83 @@ export default function SalaPage() {
         if (msg.type === 'finished') endCall();
       } catch { /* noop */ }
     };
-    ws.onclose = () => {};
-
     const ka = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
     }, 25000);
     ws.onclose = () => clearInterval(ka);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, cameraOn, micOn]);
+  }, [id]);
 
-  // ── End call ───────────────────────────────────────────────────────────────
+  // ── End call + download recording ─────────────────────────────────────────
   const endCall = useCallback(async () => {
+    if (phaseRef.current === 'finished') return;
     setPhase('finished');
     phaseRef.current = 'finished';
     stopListeningRef.current();
     if (timerRef.current) clearInterval(timerRef.current);
     audioCtxRef.current?.close().catch(() => {});
+    audioQueueRef.current = [];
 
     const mr = recorderRef.current;
     if (mr && mr.state !== 'inactive') {
       mr.stop();
       await new Promise<void>(res => { mr.onstop = () => res(); });
-      const blob = new Blob(chunksRef.current, { type: 'video/webm' });
-      if (blob.size > 1000) {
+
+      const blob = new Blob(chunksRef.current, { type: mimeTypeRef.current || 'video/webm' });
+      if (blob.size > 5000) {
+        // Download recording locally
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const ext = mimeTypeRef.current.includes('mp4') ? 'mp4' : 'webm';
+        a.download = `entrevista-${id.slice(0, 8)}.${ext}`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+
+        // Upload to backend (optional, fire-and-forget)
         fetch(`${API_URL}/api/sala/${id}/recording`, {
           method: 'POST',
-          headers: { 'Content-Type': 'video/webm' },
+          headers: { 'Content-Type': blob.type },
           body: blob,
         }).catch(() => {});
       }
     }
+
     setRecording(false);
     streamRef.current?.getTracks().forEach(t => t.stop());
     wsRef.current?.close();
   }, [id]);
 
-  // ── Mic / camera toggles ───────────────────────────────────────────────────
+  // ── Mic toggle ────────────────────────────────────────────────────────────
   const toggleMic = useCallback(() => {
     const next = !micOnRef.current;
     setMicOn(next);
     micOnRef.current = next;
     streamRef.current?.getAudioTracks().forEach(t => (t.enabled = next));
-    if (!next) stopListeningRef.current();
+    if (!next) {
+      stopListeningRef.current();
+    } else if (phaseRef.current === 'running' && !playingRef.current) {
+      startListeningRef.current();
+    }
   }, []);
 
+  // ── Camera toggle ─────────────────────────────────────────────────────────
   const toggleCam = useCallback(() => {
-    const next = !cameraOn;
+    const next = !cameraOnRef.current;
     setCameraOn(next);
+    cameraOnRef.current = next;
     streamRef.current?.getVideoTracks().forEach(t => (t.enabled = next));
-  }, [cameraOn]);
+  }, []);
 
+  // ── Recording pause/resume ────────────────────────────────────────────────
   const toggleRec = useCallback(() => {
     const mr = recorderRef.current;
     if (!mr) return;
-    if (mr.state === 'recording') { mr.pause(); setRecording(false); }
-    else { mr.resume(); setRecording(true); }
+    if (mr.state === 'recording') { mr.pause();  setRecording(false); }
+    else if (mr.state === 'paused') { mr.resume(); setRecording(true);  }
   }, []);
 
-  // ── Cleanup ────────────────────────────────────────────────────────────────
+  // ── Cleanup ───────────────────────────────────────────────────────────────
   useEffect(() => () => {
     if (timerRef.current) clearInterval(timerRef.current);
     wsRef.current?.close();
@@ -303,62 +337,50 @@ export default function SalaPage() {
   const fmt = (s: number) =>
     `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
-  const meetCode = id.slice(0, 3) + '-' + id.slice(3, 7) + '-' + id.slice(7, 10);
+  const meetCode = id.length >= 10
+    ? id.slice(0, 3) + '-' + id.slice(3, 7) + '-' + id.slice(7, 10)
+    : id;
 
-  // ── Phase routing ──────────────────────────────────────────────────────────
+  // ── Phase routing ─────────────────────────────────────────────────────────
   if (phase === 'loading')  return <Loading />;
   if (phase === 'error')    return <ErrorScreen msg={errMsg} />;
   if (phase === 'finished') return <FinishedScreen info={info} elapsed={elapsed} fmt={fmt} />;
-
-  // ── Shared video elements (mounted in ALL phases so refs are stable) ───────
-  const sharedVideos = (
-    <>
-      {/* leIA videos — only visible in running phase */}
-      <video ref={idleRef} autoPlay loop muted playsInline
-        style={{ display: phase === 'running' ? 'block' : 'none', position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}>
-        <source src={`${API_URL}/bot-stage-video/idle`} type="video/mp4" />
-      </video>
-      <video ref={talkRef} loop muted playsInline
-        style={{ display: 'none', position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}>
-        <source src={`${API_URL}/bot-stage-video/talk`} type="video/mp4" />
-      </video>
-    </>
-  );
 
   // ═══════════════════════════════════════════════════════════════════════════
   // LOBBY
   // ═══════════════════════════════════════════════════════════════════════════
   if (phase === 'lobby') {
     return (
-      <div style={{ position: 'fixed', inset: 0, background: '#000', fontFamily: 'Google Sans, Roboto, Arial, sans-serif', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 24, padding: 16 }}>
-        {/* Company / job */}
+      <div style={{ position: 'fixed', inset: 0, background: '#000', fontFamily: 'Google Sans, Roboto, sans-serif', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 24, padding: 16 }}>
         <div style={{ textAlign: 'center' }}>
-          <p style={{ color: '#8ab4f8', fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{info?.company}</p>
+          <p style={{ color: '#8ab4f8', fontSize: 13, fontWeight: 500, margin: '0 0 4px' }}>{info?.company}</p>
           <h1 style={{ fontSize: 22, fontWeight: 400, margin: 0 }}>{info?.jobTitle ?? 'Entrevista'}</h1>
-          {info?.candidateName && <p style={{ color: '#9aa0a6', fontSize: 13, marginTop: 4 }}>Hola, {info.candidateName}</p>}
+          {info?.candidateName && <p style={{ color: '#9aa0a6', fontSize: 13, margin: '4px 0 0' }}>Hola, {info.candidateName}</p>}
         </div>
 
         {/* Camera preview */}
         <div style={{ position: 'relative', width: 'min(480px, calc(100vw - 32px))', aspectRatio: '4/3', borderRadius: 12, overflow: 'hidden', background: '#1c1c1c' }}>
-          <video ref={selfRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)', display: 'block' }} />
-          {/* name badge inside preview */}
-          <div style={{ position: 'absolute', bottom: 12, left: 12, background: 'rgba(0,0,0,0.6)', borderRadius: 4, padding: '3px 10px', fontSize: 13 }}>
+          <video ref={lobbyVideoRef} autoPlay playsInline muted
+            style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)', display: 'block' }} />
+          <div style={{ position: 'absolute', bottom: 12, left: 12, background: 'rgba(0,0,0,0.65)', borderRadius: 4, padding: '3px 10px', fontSize: 13 }}>
             {info?.candidateName ?? 'Tú'}
           </div>
-          {/* lobby mic/cam toggles */}
+          {/* Lobby controls */}
           <div style={{ position: 'absolute', bottom: 12, right: 12, display: 'flex', gap: 8 }}>
-            <LobbyIconBtn active={micOn}    onClick={() => { setMicOn(v => !v); }} icon={micOn ? <MicSVG /> : <MicOffSVG />}    bg={micOn ? 'rgba(255,255,255,0.15)' : '#ea4335'} />
-            <LobbyIconBtn active={cameraOn} onClick={() => { setCameraOn(v => !v); }} icon={cameraOn ? <CamSVG /> : <CamOffSVG />} bg={cameraOn ? 'rgba(255,255,255,0.15)' : '#ea4335'} />
+            <LobbyBtn onClick={() => setMicOn(v => !v)}
+              active={micOn} activeColor="#3c4043" inactiveColor="#ea4335"
+              icon={micOn ? <MicSVG size={16}/> : <MicOffSVG size={16}/>} />
+            <LobbyBtn onClick={() => setCameraOn(v => !v)}
+              active={cameraOn} activeColor="#3c4043" inactiveColor="#ea4335"
+              icon={cameraOn ? <CamSVG size={16}/> : <CamOffSVG size={16}/>} />
           </div>
         </div>
 
-        {/* Join button */}
-        <button onClick={joinCall}
-          style={{ background: '#1a73e8', color: '#fff', border: 'none', borderRadius: 24, padding: '12px 40px', fontSize: 15, fontWeight: 500, cursor: 'pointer', minWidth: 200, fontFamily: 'inherit' }}>
+        <button onClick={joinCall} style={{ background: '#1a73e8', color: '#fff', border: 'none', borderRadius: 24, padding: '12px 40px', fontSize: 15, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit', letterSpacing: 0.15 }}>
           Unirse ahora
         </button>
         <p style={{ color: '#5f6368', fontSize: 12, textAlign: 'center', maxWidth: 300, margin: 0 }}>
-          leIA conducirá la entrevista. Hablá en voz alta para responder cada pregunta.
+          leIA conducirá la entrevista. Respondé en voz alta cada pregunta.
         </p>
       </div>
     );
@@ -368,29 +390,25 @@ export default function SalaPage() {
   // RUNNING — Google Meet style
   // ═══════════════════════════════════════════════════════════════════════════
   return (
-    <div style={{ position: 'fixed', inset: 0, background: '#000', fontFamily: 'Google Sans, Roboto, Arial, sans-serif', color: '#fff', overflow: 'hidden' }}>
+    <div style={{ position: 'fixed', inset: 0, background: '#000', fontFamily: 'Google Sans, Roboto, sans-serif', color: '#fff', overflow: 'hidden', userSelect: 'none' }}>
 
-      {/* ── Top bar (floating text, like Meet) ───────────────────────────── */}
-      <div style={{ position: 'absolute', top: 0, inset: '0 0 auto 0', height: 52, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 20px', zIndex: 20, pointerEvents: 'none' }}>
-        <span style={{ fontSize: 13, color: '#9aa0a6' }}>
-          {fmt(elapsed)} · {meetCode}
+      {/* ── Top floating bar ─────────────────────────────────────────────── */}
+      <div style={{ position: 'absolute', top: 0, inset: '0 0 auto 0', height: 52, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 20px', zIndex: 20 }}>
+        <span style={{ fontSize: 13, color: '#9aa0a6', letterSpacing: 0.2 }}>
+          {fmt(elapsed)}&nbsp;·&nbsp;{meetCode}
         </span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, pointerEvents: 'auto' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {recording && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(0,0,0,0.5)', borderRadius: 20, padding: '3px 10px' }}>
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#ea4335', display: 'inline-block', animation: 'blink 1.4s step-start infinite' }} />
-              <span style={{ fontSize: 12 }}>REC</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(234,67,53,0.18)', border: '1px solid rgba(234,67,53,0.4)', borderRadius: 20, padding: '3px 10px' }}>
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#ea4335', display: 'inline-block', animation: 'pulse 1.4s ease-in-out infinite' }} />
+              <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: 1, color: '#ea4335' }}>REC</span>
             </div>
           )}
-          <div style={{ width: 32, height: 32, borderRadius: '50%', background: '#3c4043', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14 }}>
-            1
-          </div>
         </div>
       </div>
 
       {/* ── Main tile (leIA) ─────────────────────────────────────────────── */}
-      <div style={{ position: 'absolute', inset: '52px 0 72px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px 8px 8px 8px' }}>
-        {/* Tile wrapper: 16:9, fits in viewport */}
+      <div style={{ position: 'absolute', inset: '52px 0 72px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 8 }}>
         <div style={{
           position: 'relative',
           width:  'min(calc((100vh - 132px) * 16 / 9), calc(100vw - 16px))',
@@ -398,16 +416,24 @@ export default function SalaPage() {
           borderRadius: 12,
           overflow: 'hidden',
           background: '#1c1c1c',
-          outline: leiaSpeaking ? '3px solid #1a73e8' : '1px solid rgba(255,255,255,0.1)',
-          transition: 'outline-color 0.15s',
+          boxShadow: leiaSpeaking ? '0 0 0 3px #1a73e8' : '0 0 0 1px rgba(255,255,255,0.08)',
+          transition: 'box-shadow 0.15s',
         }}>
-          {/* leIA video (idle / talk) */}
-          {sharedVideos}
+          {/* Idle video */}
+          <video ref={idleRef} autoPlay loop muted playsInline
+            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}>
+            <source src={`${API_URL}/bot-stage-video/idle`} type="video/mp4" />
+          </video>
+          {/* Talk video */}
+          <video ref={talkRef} loop muted playsInline
+            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', display: 'none' }}>
+            <source src={`${API_URL}/bot-stage-video/talk`} type="video/mp4" />
+          </video>
 
           {/* Thinking dots */}
           {leiaThinking && !leiaSpeaking && (
-            <div style={{ position: 'absolute', bottom: 14, left: 14, display: 'flex', gap: 5, background: 'rgba(0,0,0,0.55)', borderRadius: 20, padding: '5px 12px' }}>
-              {[0,150,300].map(d => (
+            <div style={{ position: 'absolute', bottom: 16, left: 16, display: 'flex', gap: 5, alignItems: 'center', background: 'rgba(0,0,0,0.55)', borderRadius: 20, padding: '6px 14px' }}>
+              {[0, 150, 300].map(d => (
                 <span key={d} style={{ width: 7, height: 7, borderRadius: '50%', background: '#fff', display: 'inline-block', animation: `bounce 1s ${d}ms ease-in-out infinite` }} />
               ))}
             </div>
@@ -415,125 +441,88 @@ export default function SalaPage() {
 
           {/* Sound bars when speaking */}
           {leiaSpeaking && (
-            <div style={{ position: 'absolute', bottom: 14, left: 14, display: 'flex', alignItems: 'flex-end', gap: 3, height: 18 }}>
-              {[0,1,2,3].map(i => (
-                <span key={i} style={{ width: 3, borderRadius: 3, background: '#fff', opacity: 0.85, display: 'inline-block', animation: `eq ${0.5 + i * 0.08}s ease-in-out ${i * 60}ms infinite alternate` }} />
+            <div style={{ position: 'absolute', bottom: 18, left: 16, display: 'flex', alignItems: 'flex-end', gap: 3, height: 20 }}>
+              {[0, 1, 2, 3].map(i => (
+                <span key={i} style={{ width: 3, borderRadius: 3, background: '#1a73e8', opacity: 0.9, display: 'inline-block', animation: `eq ${0.5 + i * 0.07}s ease-in-out ${i * 55}ms infinite alternate` }} />
               ))}
             </div>
           )}
 
           {/* Name badge */}
-          <div style={{ position: 'absolute', bottom: 14, left: leiaSpeaking ? 36 : 14, transition: 'left 0.15s', background: 'rgba(0,0,0,0.6)', borderRadius: 4, padding: '3px 10px', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ width: 8, height: 8, borderRadius: '50%', background: leiaSpeaking ? '#1a73e8' : 'transparent', border: '1.5px solid rgba(255,255,255,0.4)', display: 'inline-block', flexShrink: 0 }} />
+          <div style={{ position: 'absolute', bottom: 16, left: leiaSpeaking ? 38 : 16, transition: 'left 0.15s', background: 'rgba(0,0,0,0.65)', borderRadius: 4, padding: '3px 10px', fontSize: 13, display: 'flex', alignItems: 'center', gap: 7 }}>
+            {leiaSpeaking && <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#1a73e8', display: 'inline-block', flexShrink: 0 }} />}
             leIA
           </div>
         </div>
       </div>
 
-      {/* ── Self-cam PiP (bottom-right, above controls) ───────────────────── */}
-      <div style={{
-        position: 'absolute',
-        bottom: 84,
-        right: 12,
-        width: 180,
-        height: 101,
-        borderRadius: 8,
-        overflow: 'hidden',
-        background: '#1c1c1c',
-        outline: listening ? '2px solid #34a853' : '1px solid rgba(255,255,255,0.15)',
-        transition: 'outline-color 0.15s',
-        zIndex: 10,
-        cursor: 'default',
-      }}>
-        {cameraOn ? (
-          <video ref={selfRef} autoPlay playsInline muted
-            style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)', display: 'block' }} />
-        ) : (
-          <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28 }}>
+      {/* ── PiP self-cam ─────────────────────────────────────────────────── */}
+      <div style={{ position: 'absolute', bottom: 84, right: 12, width: 180, height: 101, borderRadius: 8, overflow: 'hidden', background: '#1c1c1c', boxShadow: listening ? '0 0 0 2px #34a853' : '0 0 0 1px rgba(255,255,255,0.12)', transition: 'box-shadow 0.15s', zIndex: 10 }}>
+        {/* Video always mounted so srcObject persists across camera toggles */}
+        <video ref={pipRef} autoPlay playsInline muted
+          style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)', display: 'block', visibility: cameraOn ? 'visible' : 'hidden' }} />
+        {!cameraOn && (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 26, background: '#1c1c1c' }}>
             {(info?.candidateName ?? 'T')[0].toUpperCase()}
           </div>
         )}
-        <div style={{ position: 'absolute', bottom: 5, left: 8, fontSize: 11, background: 'rgba(0,0,0,0.6)', borderRadius: 3, padding: '1px 6px' }}>
+        <div style={{ position: 'absolute', bottom: 5, left: 7, fontSize: 11, background: 'rgba(0,0,0,0.65)', borderRadius: 3, padding: '1px 6px' }}>
           {info?.candidateName ?? 'Tú'} (tú)
         </div>
         {!micOn && (
-          <div style={{ position: 'absolute', top: 5, right: 6 }}>
-            <MicOffSVG size={14} />
+          <div style={{ position: 'absolute', top: 5, right: 6, background: 'rgba(0,0,0,0.6)', borderRadius: '50%', width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <MicOffSVG size={12} />
           </div>
         )}
       </div>
 
-      {/* ── Subtitles / captions ─────────────────────────────────────────── */}
+      {/* ── Subtitles ─────────────────────────────────────────────────────── */}
       {showCC && subtitle && (
-        <div style={{ position: 'absolute', bottom: 84, left: 0, right: 200, display: 'flex', justifyContent: 'center', zIndex: 10, pointerEvents: 'none', padding: '0 12px' }}>
-          <div style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(8px)', borderRadius: 8, padding: '8px 18px', fontSize: 15, lineHeight: 1.5, maxWidth: 560, textAlign: 'center' }}>
+        <div style={{ position: 'absolute', bottom: 84, left: 0, right: 200, display: 'flex', justifyContent: 'center', zIndex: 10, padding: '0 16px', pointerEvents: 'none' }}>
+          <div style={{ background: 'rgba(0,0,0,0.78)', backdropFilter: 'blur(10px)', borderRadius: 8, padding: '8px 20px', fontSize: 15, lineHeight: 1.55, maxWidth: 560, textAlign: 'center' }}>
             {subtitle}
           </div>
         </div>
       )}
-
-      {/* Interim transcript */}
       {showCC && interimText && (
-        <div style={{ position: 'absolute', bottom: subtitle ? 138 : 84, inset: '0 200px 0 0', display: 'flex', justifyContent: 'center', alignItems: 'flex-end', zIndex: 10, pointerEvents: 'none' }}>
+        <div style={{ position: 'absolute', bottom: subtitle ? 142 : 84, inset: '0 200px 0 0', display: 'flex', justifyContent: 'center', alignItems: 'flex-end', zIndex: 10, pointerEvents: 'none', paddingBottom: 2 }}>
           <span style={{ fontSize: 13, color: '#9aa0a6', fontStyle: 'italic' }}>{interimText}</span>
         </div>
       )}
 
-      {/* ── Bottom control bar (Meet style: floating, centered) ──────────── */}
-      <div style={{
-        position: 'absolute',
-        bottom: 0,
-        inset: 'auto 0 0 0',
-        height: 72,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        zIndex: 30,
-      }}>
-
-        {/* Left group */}
-        <div style={{ display: 'flex', gap: 6, marginRight: 4 }}>
-          {/* CC toggle */}
-          <MeetBtn
-            onClick={() => setShowCC(v => !v)}
-            label="Subtítulos"
-            active={showCC}
-            activeColor="#1a73e8"
-            icon={<CCSVG />}
-          />
-          {/* Record toggle */}
-          <MeetBtn
-            onClick={toggleRec}
-            label={recording ? 'Detener' : 'Grabar'}
-            active={recording}
-            activeColor="#ea4335"
-            icon={<RecSVG recording={recording} />}
-          />
+      {/* ── Control bar ──────────────────────────────────────────────────── */}
+      <div style={{ position: 'absolute', bottom: 0, inset: 'auto 0 0 0', height: 72, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, zIndex: 30, padding: '0 12px' }}>
+        {/* Group: CC + REC */}
+        <div style={{ display: 'flex', gap: 6, marginRight: 8 }}>
+          <CtrlBtn onClick={() => setShowCC(v => !v)} label="Subtítulos" active={showCC} highlight="#1a73e8"
+            icon={<CCSVG />} />
+          <CtrlBtn onClick={toggleRec} label={recording ? 'Detener grabación' : 'Grabar'}
+            active={recording} highlight="#ea4335" icon={<RecSVG recording={recording} />} />
         </div>
 
-        {/* Center group */}
-        <div style={{ display: 'flex', gap: 6 }}>
-          <MeetBtn onClick={toggleMic}  label={micOn    ? 'Silenciar'  : 'Activar mic'} active={micOn}    icon={micOn    ? <MicSVG /> : <MicOffSVG />}    inactiveRed />
-          <MeetBtn onClick={toggleCam}  label={cameraOn ? 'Cámara'     : 'Sin cámara'}  active={cameraOn} icon={cameraOn ? <CamSVG /> : <CamOffSVG />}    inactiveRed />
-        </div>
+        {/* Group: Mic + Cam */}
+        <CtrlBtn onClick={toggleMic} label={micOn ? 'Silenciar' : 'Activar micrófono'}
+          active={micOn} icon={micOn ? <MicSVG /> : <MicOffSVG />} offRed={!micOn} />
+        <CtrlBtn onClick={toggleCam} label={cameraOn ? 'Apagar cámara' : 'Encender cámara'}
+          active={cameraOn} icon={cameraOn ? <CamSVG /> : <CamOffSVG />} offRed={!cameraOn} />
 
-        {/* Hang up — separated */}
-        <div style={{ marginLeft: 4 }}>
-          <button onClick={endCall}
-            style={{ width: 52, height: 52, borderRadius: '50%', background: '#ea4335', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-            title="Salir de la entrevista"
+        {/* Hang up */}
+        <div style={{ marginLeft: 8 }}>
+          <button onClick={endCall} title="Finalizar entrevista"
+            style={{ width: 54, height: 54, borderRadius: '50%', background: '#ea4335', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 6px rgba(0,0,0,0.5)', transition: 'transform 0.1s, opacity 0.1s' }}
+            onMouseEnter={e => (e.currentTarget.style.opacity = '0.88')}
+            onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
           >
-            <PhoneSVG />
+            <HangUpSVG />
           </button>
         </div>
       </div>
 
-      {/* ── Keyframes ────────────────────────────────────────────────────── */}
+      {/* keyframes */}
       <style>{`
-        @keyframes blink  { 0%,100%{opacity:1} 50%{opacity:0.2} }
-        @keyframes bounce { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-5px)} }
-        @keyframes eq     { from{height:4px} to{height:16px} }
+        @keyframes pulse  { 0%,100%{opacity:1} 50%{opacity:.25} }
+        @keyframes bounce { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
+        @keyframes eq     { from{height:4px} to{height:18px} }
       `}</style>
     </div>
   );
@@ -565,70 +554,124 @@ function ErrorScreen({ msg }: { msg: string }) {
 function FinishedScreen({ info, elapsed, fmt }: { info: SalaInfo | null; elapsed: number; fmt: (s: number) => string }) {
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#000', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 24, fontFamily: 'Google Sans, Roboto, sans-serif', color: '#fff', padding: 24 }}>
-      <div style={{ width: 72, height: 72, borderRadius: '50%', background: '#1e3a22', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <svg width="36" height="36" viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="#34a853" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
+      <div style={{ width: 72, height: 72, borderRadius: '50%', background: '#1a3a1f', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="#34a853" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
       </div>
       <div style={{ textAlign: 'center' }}>
         <h1 style={{ fontSize: 22, fontWeight: 400, margin: '0 0 8px' }}>Entrevista finalizada</h1>
-        <p style={{ color: '#9aa0a6', margin: 0 }}>Gracias{info?.candidateName ? `, ${info.candidateName}` : ''}. El equipo de {info?.company ?? 'la empresa'} estará en contacto pronto.</p>
+        <p style={{ color: '#9aa0a6', margin: 0 }}>
+          Gracias{info?.candidateName ? `, ${info.candidateName}` : ''}. El equipo de {info?.company ?? 'la empresa'} se pondrá en contacto pronto.
+        </p>
         {elapsed > 0 && <p style={{ color: '#5f6368', fontSize: 13, marginTop: 8 }}>Duración: {fmt(elapsed)}</p>}
       </div>
-      {info?.jobTitle && <p style={{ color: '#5f6368', fontSize: 13 }}>{info.jobTitle} · {info.company}</p>}
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Control button components
+// Control buttons
 
-function MeetBtn({ onClick, label, active, icon, activeColor = '#3c4043', inactiveRed }: {
+function CtrlBtn({ onClick, label, active, icon, highlight = '#3c4043', offRed }: {
   onClick: () => void; label: string; active: boolean; icon: React.ReactNode;
-  activeColor?: string; inactiveRed?: boolean;
+  highlight?: string; offRed?: boolean;
 }) {
+  const bg = offRed && !active ? '#ea4335' : '#3c4043';
+  const outline = active && highlight !== '#3c4043' ? `2px solid ${highlight}` : 'none';
   return (
     <button onClick={onClick} title={label}
-      style={{ background: active ? '#3c4043' : (inactiveRed ? '#ea4335' : '#3c4043'), border: 'none', borderRadius: '50%', width: 48, height: 48, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', outline: active && activeColor !== '#3c4043' ? `2px solid ${activeColor}` : 'none', transition: 'background 0.1s', flexShrink: 0 }}>
+      style={{ background: bg, border: 'none', outline, borderRadius: '50%', width: 48, height: 48, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.12s, outline 0.12s', flexShrink: 0 }}
+      onMouseEnter={e => (e.currentTarget.style.filter = 'brightness(1.2)')}
+      onMouseLeave={e => (e.currentTarget.style.filter = '')}
+    >
       {icon}
     </button>
   );
 }
 
-function LobbyIconBtn({ active, onClick, icon, bg }: { active: boolean; onClick: () => void; icon: React.ReactNode; bg: string }) {
+function LobbyBtn({ onClick, active, activeColor, inactiveColor, icon }: {
+  onClick: () => void; active: boolean; activeColor: string; inactiveColor: string; icon: React.ReactNode;
+}) {
   return (
-    <button onClick={onClick} style={{ background: bg, border: 'none', borderRadius: '50%', width: 38, height: 38, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.1s' }}>
+    <button onClick={onClick} style={{ background: active ? activeColor : inactiveColor, border: 'none', borderRadius: '50%', width: 36, height: 36, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       {icon}
     </button>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SVG icons
+// SVG icons — stroke-based, consistent style
 
 function MicSVG({ size = 20 }: { size?: number }) {
-  return <svg width={size} height={size} viewBox="0 0 24 24" fill="white"><path d="M12 14a3 3 0 003-3V5a3 3 0 00-6 0v6a3 3 0 003 3zm5-3a5 5 0 01-10 0H5a7 7 0 0014 0h-2zm-5 7v2h2v2h-4v-2h2v-2a7 7 0 01-7-7h2a5 5 0 0010 0h2a7 7 0 01-7 7z"/></svg>;
-}
-function MicOffSVG({ size = 20 }: { size?: number }) {
-  return <svg width={size} height={size} viewBox="0 0 24 24" fill="white"><path d="M19 11a7 7 0 01-1.16 3.81L16.42 13.4A5 5 0 0017 11h2zM12 5a3 3 0 013 3v.17l-6-6A3 3 0 0112 2V5zm0 9a3 3 0 01-3-3V5.83L3.27 3.1 2 4.37l7 7V11a5 5 0 005 5v2h2v-2a7 7 0 004.43-2.69l-1.43-1.43A5 5 0 0112 17v-3zM3 13h2a7 7 0 001.46 4.33L4.27 18.6A9 9 0 013 13zM4.27 3L3 4.27l.73.73L19 20.27 20.27 19 4.27 3z"/></svg>;
-}
-function CamSVG({ size = 20 }: { size?: number }) {
-  return <svg width={size} height={size} viewBox="0 0 24 24" fill="white"><path d="M15 8v8H5V8h10m1-2H4a1 1 0 00-1 1v10a1 1 0 001 1h12a1 1 0 001-1v-3.5l4 4v-11l-4 4V7a1 1 0 00-1-1z"/></svg>;
-}
-function CamOffSVG({ size = 20 }: { size?: number }) {
-  return <svg width={size} height={size} viewBox="0 0 24 24" fill="white"><path d="M21 6.5l-4 4V7a1 1 0 00-1-1H9.82L21 17.18V6.5zM3.27 2L2 3.27l4.01 4.01A1 1 0 006 8v10a1 1 0 001 1h10c.35 0 .65-.19.84-.46L19.73 21 21 19.73 3.27 2zm9.55 13H7V9.27l5.82 5.82V15z"/></svg>;
-}
-function PhoneSVG() {
-  return <svg width={22} height={22} viewBox="0 0 24 24" fill="white" style={{ transform: 'rotate(135deg)' }}><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8z"/></svg>;
-}
-function CCSVG() {
-  return <svg width={20} height={20} viewBox="0 0 24 24" fill="white"><path d="M19 4H5a2 2 0 00-2 2v12a2 2 0 002 2h14a2 2 0 002-2V6a2 2 0 00-2-2zm-8 9H9.5v-.5h-2v3h2V15H11v1a2 2 0 01-2 2H7a2 2 0 01-2-2v-4a2 2 0 012-2h2a2 2 0 012 2v1zm7 0h-1.5v-.5h-2v3h2V15H18v1a2 2 0 01-2 2h-2a2 2 0 01-2-2v-4a2 2 0 012-2h2a2 2 0 012 2v1z"/></svg>;
-}
-function RecSVG({ recording }: { recording: boolean }) {
   return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+      <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+      <line x1="12" y1="19" x2="12" y2="23"/>
+      <line x1="8"  y1="23" x2="16" y2="23"/>
+    </svg>
+  );
+}
+
+function MicOffSVG({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="1" y1="1" x2="23" y2="23"/>
+      <path d="M9 9v2a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.95-.6"/>
+      <path d="M17 16.95A7 7 0 0 1 5 10v-2"/>
+      <line x1="12" y1="19" x2="12" y2="23"/>
+      <line x1="8"  y1="23" x2="16" y2="23"/>
+    </svg>
+  );
+}
+
+function CamSVG({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="23 7 16 12 23 17 23 7" fill="white" stroke="none"/>
+      <rect x="1" y="5" width="15" height="14" rx="2"/>
+    </svg>
+  );
+}
+
+function CamOffSVG({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="1" y1="1" x2="23" y2="23"/>
+      <path d="M21 21H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3"/>
+      <path d="M11 5H6l2-3h7l2 3h3a2 2 0 0 1 2 2v9"/>
+      <line x1="23" y1="7"  x2="16" y2="11"/>
+      <line x1="16" y1="13" x2="23" y2="17"/>
+    </svg>
+  );
+}
+
+function HangUpSVG() {
+  return (
+    <svg width={24} height={24} viewBox="0 0 24 24" fill="white">
+      <path d="M6.6 10.8c1.4 2.8 3.8 5.14 6.59 6.59l2.2-2.2c.28-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" transform="rotate(135 12 12)"/>
+    </svg>
+  );
+}
+
+function CCSVG() {
+  return (
+    <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="5" width="20" height="14" rx="2"/>
+      <path d="M9 10.5a2.5 2.5 0 0 0-4 0v3a2.5 2.5 0 0 0 4 0"/>
+      <path d="M19 10.5a2.5 2.5 0 0 0-4 0v3a2.5 2.5 0 0 0 4 0"/>
+    </svg>
+  );
+}
+
+function RecSVG({ recording }: { recording: boolean }) {
+  return recording ? (
     <svg width={20} height={20} viewBox="0 0 24 24" fill="white">
-      {recording
-        ? <rect x="6" y="6" width="12" height="12" rx="2" fill="white" />
-        : <circle cx="12" cy="12" r="6" fill="white" />
-      }
+      <rect x="6" y="6" width="12" height="12" rx="2"/>
+    </svg>
+  ) : (
+    <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
+      <circle cx="12" cy="12" r="8"/>
+      <circle cx="12" cy="12" r="3.5" fill="white" stroke="none"/>
     </svg>
   );
 }

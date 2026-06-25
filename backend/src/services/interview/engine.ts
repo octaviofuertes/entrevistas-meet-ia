@@ -94,9 +94,7 @@ export class InterviewEngine {
     this.boundRecallHandler = (evt: any) => this.handleRecallEvent(evt);
     this.recall.events.on('event', this.boundRecallHandler);
 
-    // 1) Generar la primera pregunta + TTS ANTES de joinMeet. Eso nos permite
-    //    mandar el audio como automatic_audio_output, así el bot saluda apenas
-    //    entra al Meet (sin un round-trip extra a /output_audio).
+    // 1) Arrancar generación de fillers y de la primera pregunta en paralelo.
     const introPromise = this.leia.firstQuestion({
       job: this.job,
       candidateName: this.candidate.name,
@@ -105,8 +103,6 @@ export class InterviewEngine {
       .generateFillers({ job: this.job, candidateName: this.candidate.name })
       .then(async (fillers) => {
         this.emit('fillers_ready', { fillers });
-        // Filtramos antes de TTS: nada de evaluativas, transicionales o largas
-        // (por si el modelo se zarpó a pesar del prompt).
         const safe = fillers.filter((f) => isNeutralFiller(f)).slice(0, 12);
         const results = await Promise.allSettled(
           safe.map((f) => this.tts.synthesize(f))
@@ -118,41 +114,57 @@ export class InterviewEngine {
       })
       .catch(() => {});
 
-    const intro = await introPromise;
-    let introAudio: Awaited<ReturnType<typeof this.tts.synthesize>> | null = null;
-    try {
-      introAudio = await this.tts.synthesize(intro);
-    } catch (err) {
-      logger.warn({ err }, 'TTS de la primera pregunta falló; el bot va a entrar mudo');
-    }
+    const isBrowser = iv.mode === 'browser';
 
-    // 2) Crear el bot. Recall levanta un Chrome y carga el bot-stage. Todo el
-    //    audio (saludo + respuestas) va por WS a esa página.
-    try {
-      const joinRes = await this.recall.joinMeet({
-        interviewId: iv.id,
-        meetUrl: iv.meetUrl,
-        language: this.job.requirements.language,
-      });
-      if (joinRes.status === 'error') {
-        throw new Error('Recall.ai no pudo crear el bot');
+    if (isBrowser) {
+      // MODO BROWSER: joinMeet es instantáneo → llamarlo antes de TTS para que
+      // botId esté listo. Luego sentence-streaming: el primer chunk de audio
+      // llega al candidato apenas TTS sintetiza la primera oración (~200-400ms
+      // más rápido que esperar TTS del texto completo).
+      try {
+        const joinRes = await this.recall.joinMeet({
+          interviewId: iv.id,
+          meetUrl: iv.meetUrl,
+          language: this.job.requirements.language,
+        });
+        if (joinRes.status === 'error') throw new Error('BrowserRecall error');
+        this.botId = joinRes.botId;
+        await this.db.updateInterview(iv.id, { recallBotId: joinRes.botId });
+      } catch (err) {
+        this.recall.events.off('event', this.boundRecallHandler);
+        await this.db.updateInterview(iv.id, { status: 'agendada', startedAt: null, recallBotId: null });
+        this.emit('interview_status', { status: 'agendada' });
+        throw err;
       }
-      this.botId = joinRes.botId;
-      await this.db.updateInterview(iv.id, { recallBotId: joinRes.botId });
-    } catch (err) {
-      this.recall.events.off('event', this.boundRecallHandler);
-      await this.db.updateInterview(iv.id, {
-        status: 'agendada',
-        startedAt: null,
-        recallBotId: null,
-      });
-      this.emit('interview_status', { status: 'agendada' });
-      throw err;
+      const intro = await introPromise;
+      await this.askQuestion(intro); // sentence streaming — no preTtsAudio
+    } else {
+      // MODO MEET: pre-sintetizar el saludo antes de joinMeet para enviarlo
+      // como automatic_audio_output en el mismo request (evita round-trip extra).
+      const intro = await introPromise;
+      let introAudio: Awaited<ReturnType<typeof this.tts.synthesize>> | null = null;
+      try {
+        introAudio = await this.tts.synthesize(intro);
+      } catch (err) {
+        logger.warn({ err }, 'TTS de la primera pregunta falló; el bot va a entrar mudo');
+      }
+      try {
+        const joinRes = await this.recall.joinMeet({
+          interviewId: iv.id,
+          meetUrl: iv.meetUrl,
+          language: this.job.requirements.language,
+        });
+        if (joinRes.status === 'error') throw new Error('Recall.ai no pudo crear el bot');
+        this.botId = joinRes.botId;
+        await this.db.updateInterview(iv.id, { recallBotId: joinRes.botId });
+      } catch (err) {
+        this.recall.events.off('event', this.boundRecallHandler);
+        await this.db.updateInterview(iv.id, { status: 'agendada', startedAt: null, recallBotId: null });
+        this.emit('interview_status', { status: 'agendada' });
+        throw err;
+      }
+      await this.askQuestion(intro, { preTtsAudio: introAudio ?? undefined });
     }
-
-    // 3) Mandar el saludo al bot-stage (el bus bufferiza si la página todavía
-    //    no se conectó al WS).
-    await this.askQuestion(intro, { preTtsAudio: introAudio ?? undefined });
   }
 
   /**
