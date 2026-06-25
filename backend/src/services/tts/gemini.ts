@@ -1,7 +1,7 @@
 import { config } from '../../config';
 import { logger } from '../../logger';
 import type { TTSService, TTSResult } from './index';
-import { MockTTS } from './mock';
+import { EdgeTTS } from './edge';
 
 /**
  * Driver TTS usando la voz nativa de Gemini.
@@ -10,14 +10,14 @@ import { MockTTS } from './mock';
  * Voces (prebuilt): Kore, Aoede, Puck, Charon, Fenrir, Leda, Orus, Zephyr, etc.
  *
  * Endpoint: POST /v1beta/models/{model}:generateContent
- * Gemini devuelve PCM raw 16-bit LE 24kHz mono. Lo codificamos a MP3 con lamejs
- * porque /output_audio de Recall espera kind:'mp3'. Recall hace su propia
- * decodificación nativa antes de stremear al Meet, así que no hay glitches.
+ * Gemini devuelve PCM raw 16-bit LE 24kHz mono. Lo codificamos a WAV para
+ * compatibilidad con el pipeline de audio.
  *
- * Si la API falla cae al MockTTS para no romper la entrevista.
+ * Si la API falla (quota agotada, red, etc.) cae a Edge TTS (Microsoft, gratuito)
+ * para que leIA siga hablando en lugar de quedar en silencio.
  */
 export class GeminiTTS implements TTSService {
-  private fallback = new MockTTS();
+  private fallback = new EdgeTTS();
 
   async synthesize(text: string, opts?: { voiceId?: string }): Promise<TTSResult> {
     const voiceName = (opts?.voiceId ?? config.GEMINI_TTS_VOICE).trim();
@@ -76,7 +76,7 @@ export class GeminiTTS implements TTSService {
         bytes: wav.length,
       };
     } catch (err) {
-      logger.warn({ err }, 'gemini.tts: fallback a mock');
+      logger.warn({ err }, 'gemini.tts: fallback a Edge TTS (Microsoft)');
       return this.fallback.synthesize(text);
     }
   }

@@ -139,10 +139,10 @@ export class RealRecall implements RecallService {
     const words = input.text.split(/\s+/).filter(Boolean).length;
     const estimatedDurationMs = Math.max(1500, words * 320);
 
-    // Intento 1: output_audio API de Recall → audio va server-to-server,
-    // sin pasar por el tunnel ni competir con el encoder de Chrome.
-    // Resultado: audio nítido independientemente del video.
-    if (input.botId && !input.botId.startsWith('bot_err_')) {
+    // Intento 1: output_audio API de Recall → audio va server-to-server.
+    // Solo para MP3 — Recall no acepta WAV en output_audio.
+    const isMp3 = input.mimeType === 'audio/mpeg' || input.mimeType === 'audio/mp3';
+    if (isMp3 && input.botId && !input.botId.startsWith('bot_err_')) {
       try {
         const res = await fetch(`${this.endpoint}/bot/${input.botId}/output_audio/`, {
           method: 'POST',
