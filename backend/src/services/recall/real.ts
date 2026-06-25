@@ -236,6 +236,8 @@ export class RealRecall implements RecallService {
 
     // -------- Lifecycle --------
     if (evt === 'bot.in_call_recording' || evt === 'bot.joined') {
+      // Señalamos al bus que el bot está activo en el stream → flush del saludo.
+      botStageBus.activate(interviewId);
       this.events.emit('event', {
         type: 'lifecycle',
         payload: { interviewId, botId, status: 'joined' },

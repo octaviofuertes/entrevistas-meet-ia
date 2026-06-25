@@ -1,102 +1,41 @@
 import fs from 'fs';
 import path from 'path';
-import sharp from 'sharp';
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 import { logger } from '../logger';
 
 const AVATAR_DIR = path.resolve(process.cwd(), 'assets');
 
-// Cache: key → { buf, mime }
-const assetCache = new Map<string, { buf: Buffer; mime: string }>();
+const VIDEO_FILES: Record<string, string> = {
+  idle: 'idle_v.mp4',
+  talk: 'hablando_v.mp4',
+};
 
-/**
- * Convierte un GIF animado a WebP animado con delay forzado.
- * - WebP se decodifica más eficiente que GIF en Chrome (formato nativo).
- * - delay alto → menos frames por segundo → menos trabajo para el encoder
- *   de video de Recall → la voz no compite con el encoder → sin trabas.
- */
-async function gifToSlowWebP(filePath: string, delayMs: number): Promise<Buffer | null> {
-  try {
-    const meta = await sharp(filePath, { animated: true }).metadata();
-    const pages = meta.pages ?? 1;
-    // Extraemos hasta 4 frames distribuidos uniformemente para que la
-    // animación siga pareciendo natural pero a fps mínimos.
-    const MAX_FRAMES = 4;
-    const step = Math.max(1, Math.floor(pages / MAX_FRAMES));
-    const chosen: number[] = [];
-    for (let i = 0; i < pages && chosen.length < MAX_FRAMES; i += step) chosen.push(i);
-
-    // Extraemos cada frame como buffer PNG crudo.
-    const frameBuffers = await Promise.all(
-      chosen.map((p) =>
-        sharp(filePath, { page: p, animated: false })
-          .resize({ width: 1280, withoutEnlargement: true })
-          .png()
-          .toBuffer()
-      )
-    );
-
-    // Rearmamos como animated WebP: apilamos los frames en un strip vertical
-    // y usamos sharp's "pages" feature via raw GIF intermediary.
-    // El truco: sharp admite animated WebP output si el input es animated.
-    // Aquí usamos el GIF original pero forzamos el delay en el output.
-    const out = await sharp(filePath, { animated: true })
-      .resize({ width: 1280, withoutEnlargement: true })
-      .webp({ quality: 80, delay: delayMs })
-      .toBuffer();
-    logger.info({ pages, chosen: chosen.length, delayMs, kb: Math.round(out.length / 1024) }, 'avatar: animated WebP generado');
-    return out;
-  } catch (err) {
-    logger.warn({ err, filePath }, 'avatar: gifToSlowWebP falló');
-    return null;
-  }
-}
+// Cache en memoria — los videos son pequeños (200-300 KB).
+const videoCache = new Map<string, Buffer>();
 
 export async function warmAvatarCache(): Promise<void> {
-  // idle-gif → animated WebP lento (blink en silencio, sin audio que compita).
-  // 600ms/frame ≈ 1.7fps: parpadeo se ve natural, encoder casi en reposo.
-  const idlePath = path.join(AVATAR_DIR, 'idle.gif');
-  if (fs.existsSync(idlePath)) {
-    const buf = await gifToSlowWebP(idlePath, 600);
-    if (buf) assetCache.set('idle-gif', { buf, mime: 'image/webp' });
-  }
-
-  // hablando-gif → animated WebP a 3fps: boca se mueve visiblemente pero
-  // el encoder sólo trabaja 3 veces/s → CPU libre para el audio → sin trabas.
-  const habPath = path.join(AVATAR_DIR, 'hablando.gif');
-  if (fs.existsSync(habPath)) {
-    const buf = await gifToSlowWebP(habPath, 333);
-    if (buf) assetCache.set('hablando-gif', { buf, mime: 'image/webp' });
+  for (const [key, fname] of Object.entries(VIDEO_FILES)) {
+    const f = path.join(AVATAR_DIR, fname);
+    if (!fs.existsSync(f)) { logger.warn({ key, f }, 'avatar video no encontrado'); continue; }
+    try {
+      const buf = fs.readFileSync(f);
+      videoCache.set(key, buf);
+      logger.info({ key, kb: Math.round(buf.length / 1024) }, 'avatar video cargado');
+    } catch (err) {
+      logger.warn({ err, key }, 'avatar video: error al leer');
+    }
   }
 }
 
 /**
- * Bot Stage: la webpage que Recall.ai carga DENTRO del bot. Esta página corre
- * en el navegador del bot y su audio/video se streamean al Meet como la voz
- * y cámara de leIA.
- *
- * Recall.ai recomienda este patrón (Output Media → webpage) para agentes
- * interactivos. /output_audio sólo sirve para snippets cortos y según la doc
- * está PROHIBIDO usarlo para "dynamic transcription-based replies" — por eso
- * antes el bot saludaba pero no respondía: Recall aceptaba el POST (200) pero
- * silenciosamente no reproducía nada.
+ * Bot Stage: webpage que Recall.ai carga dentro del bot.
+ * Audio/video se streamean a Meet como voz y cámara de leIA.
  *
  * Endpoints:
- *   GET  /bot-stage/:interviewId          → HTML que el bot va a cargar.
- *   WS   /ws/bot-stage/:interviewId       → canal por el que mandamos audio.
- *
- * Flujo:
- *   1. Engine pide playAudio(interviewId, base64) → botStageBus.send(...)
- *   2. Si la página del bot está conectada por WS → recibe el audio y lo
- *      reproduce con AudioContext. Si todavía no se conectó (Recall todavía
- *      no levantó el browser), bufferizamos hasta que se conecte.
- *
- * Notas operativas:
- *   - PUBLIC_BASE_URL TIENE que ser accesible por el navegador del bot.
- *     ngrok-free.dev muestra una página interstitial a cualquier User-Agent
- *     de browser → Recall NO va a poder cargar la página. Usar Cloudflare
- *     Tunnel (`cloudflared tunnel --url http://localhost:4000`) o localtunnel.
+ *   GET /bot-stage/:id          → HTML
+ *   GET /bot-stage-video/:key   → MP4 (idle | talk)
+ *   WS  /ws/bot-stage/:id       → canal de audio
  */
 
 type StageMsg = { type: 'play'; mimeType: string; audioBase64: string };
@@ -104,40 +43,53 @@ type StageMsg = { type: 'play'; mimeType: string; audioBase64: string };
 class BotStageBus {
   private clients = new Map<string, WebSocket>();
   private buffered = new Map<string, StageMsg[]>();
+  /** Timer de fallback: si la página no manda {type:'ready'} en 8s, flush igual. */
+  private fallbackTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   register(interviewId: string, ws: WebSocket) {
     const old = this.clients.get(interviewId);
-    if (old && old !== ws) {
-      try { old.close(); } catch { /* noop */ }
-    }
+    if (old && old !== ws) { try { old.close(); } catch { /* noop */ } }
     this.clients.set(interviewId, ws);
     logger.info({ interviewId }, 'bot-stage: cliente conectado');
 
-    const pending = this.buffered.get(interviewId) ?? [];
-    if (pending.length > 0) {
-      logger.info({ interviewId, n: pending.length }, 'bot-stage: flushing buffer');
-      for (const m of pending) this.sendRaw(ws, m);
-      this.buffered.delete(interviewId);
-    }
+    // Fallback: si la página no envía {type:'ready'} en 8s, flush igual.
+    const timer = setTimeout(() => {
+      logger.warn({ interviewId }, 'bot-stage: timeout de ready, flushing buffer por fallback');
+      this.flushBuffer(interviewId, ws);
+    }, 8000);
+    this.fallbackTimers.set(interviewId, timer);
 
     ws.on('close', () => {
       if (this.clients.get(interviewId) === ws) {
+        const t = this.fallbackTimers.get(interviewId);
+        if (t) { clearTimeout(t); this.fallbackTimers.delete(interviewId); }
         this.clients.delete(interviewId);
         logger.info({ interviewId }, 'bot-stage: cliente desconectado');
       }
     });
   }
 
+  /** La página manda {type:'ready'} cuando el video ya está corriendo y pasaron 1.5s. */
+  markReady(interviewId: string) {
+    const t = this.fallbackTimers.get(interviewId);
+    if (t) { clearTimeout(t); this.fallbackTimers.delete(interviewId); }
+    logger.info({ interviewId }, 'bot-stage: página ready → flushing');
+    const ws = this.clients.get(interviewId);
+    if (ws) this.flushBuffer(interviewId, ws);
+  }
+
+  /** Conservado para compatibilidad (webhook de lifecycle que nunca llega vía realtime_endpoints). */
+  activate(interviewId: string) {
+    logger.info({ interviewId }, 'bot-stage: activate() llamado (sin efecto, usamos handshake)');
+  }
+
   send(interviewId: string, msg: StageMsg) {
     const ws = this.clients.get(interviewId);
-    if (ws && (ws as any).readyState === 1 /* OPEN */) {
-      this.sendRaw(ws, msg);
-      return;
-    }
+    if (ws && (ws as any).readyState === 1) { this.sendRaw(ws, msg); return; }
     const arr = this.buffered.get(interviewId) ?? [];
     arr.push(msg);
     this.buffered.set(interviewId, arr);
-    logger.info({ interviewId, bufferedCount: arr.length }, 'bot-stage: cliente no listo, bufferizado');
+    logger.info({ interviewId, bufferedCount: arr.length }, 'bot-stage: bufferizado');
   }
 
   isConnected(interviewId: string): boolean {
@@ -152,7 +104,19 @@ class BotStageBus {
     }
     const buffered: Record<string, number> = {};
     for (const [id, arr] of this.buffered.entries()) buffered[id] = arr.length;
-    return { connected, buffered };
+    return { connected, buffered, pending: [...this.fallbackTimers.keys()] };
+  }
+
+  private flushBuffer(interviewId: string, ws: WebSocket) {
+    if ((ws as any).readyState !== 1) {
+      logger.warn({ interviewId }, 'bot-stage: WS cerrado antes del flush, buffer conservado');
+      return;
+    }
+    const pending = this.buffered.get(interviewId) ?? [];
+    if (pending.length === 0) return;
+    logger.info({ interviewId, n: pending.length }, 'bot-stage: flushing buffer');
+    for (const m of pending) this.sendRaw(ws, m);
+    this.buffered.delete(interviewId);
   }
 
   private sendRaw(ws: WebSocket, msg: StageMsg) {
@@ -170,15 +134,18 @@ const STAGE_HTML = `<!doctype html>
 <meta name="viewport" content="width=1280, initial-scale=1">
 <title>leIA</title>
 <style>
-  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #202124; }
-  #avatar {
-    position: absolute; inset: 0; width: 100%; height: 100%;
-    object-fit: cover; object-position: center;
-  }
+  html, body { margin: 0; padding: 0; width: 1280px; height: 720px; overflow: hidden; background: #202124; }
+  video { position: absolute; top: 0; left: 0; width: 1280px; height: 720px;
+          object-fit: cover; object-position: center; }
 </style>
 </head>
 <body>
-<img id="avatar" src="/bot-stage-avatar/idle-gif" alt="">
+<video id="v-idle" autoplay loop muted playsinline preload="auto">
+  <source src="/bot-stage-video/idle" type="video/mp4">
+</video>
+<video id="v-talk" loop muted playsinline preload="auto" style="display:none">
+  <source src="/bot-stage-video/talk" type="video/mp4">
+</video>
 <audio id="player" preload="auto"></audio>
 <script>
 (function() {
@@ -186,36 +153,52 @@ const STAGE_HTML = `<!doctype html>
   var wsProto = location.protocol === 'https:' ? 'wss://' : 'ws://';
   var wsUrl = wsProto + location.host + '/ws/bot-stage/' + interviewId;
   var player = document.getElementById('player');
-  var queue = [];
-  var playing = false;
-  var currentUrl = null;
+  var vIdle  = document.getElementById('v-idle');
+  var vTalk  = document.getElementById('v-talk');
+  var queue = [], playing = false, currentUrl = null, talking = false;
+  var ws = null, readySent = false;
 
-  // ── Avatar: animated WebP a fps reducidos ────────────────────────────────────
-  // idle-gif    → WebP animado ~1.7fps (blink natural en silencio)
-  // hablando-gif → WebP animado ~3fps  (boca moviéndose al hablar)
-  // Ambos son WebP (decodifica más eficiente que GIF en Chrome) y con
-  // delay forzado para que el encoder de Recall haga mínimo trabajo.
-  var URL_IDLE = '/bot-stage-avatar/idle-gif';
-  var URL_TALK = '/bot-stage-avatar/hablando-gif';
-  var avatar = document.getElementById('avatar');
-  var talking = false;
+  // Idle a 40% velocidad → 12fps efectivos para el encoder de Recall (en vez de 30fps).
+  // P-frames vacíos para los frames repetidos → 60% menos CPU de encode cuando está idle.
+  vIdle.addEventListener('canplay', function onCan() {
+    vIdle.removeEventListener('canplay', onCan);
+    vIdle.playbackRate = 0.4;
+  });
+  vTalk.load();
 
-  var preload = new Image(); preload.src = URL_TALK;
+  function sendReady() {
+    if (readySent || !ws || ws.readyState !== 1) return;
+    readySent = true;
+    try { ws.send(JSON.stringify({ type: 'ready' })); } catch(e) {}
+  }
+
+  vIdle.addEventListener('playing', function onP() {
+    vIdle.removeEventListener('playing', onP);
+    setTimeout(sendReady, 2000);
+  });
 
   function setTalking(on) {
     on = !!on;
     if (on === talking) return;
     talking = on;
-    avatar.src = on ? URL_TALK : URL_IDLE;
+    if (on) {
+      vIdle.style.display = 'none';
+      vTalk.style.display = 'block';
+      vTalk.currentTime = 0;
+      vTalk.play().catch(function(){});
+    } else {
+      vTalk.style.display = 'none';
+      vTalk.pause();
+      vIdle.style.display = 'block';
+    }
   }
 
   function revokeCurrent() {
-    if (currentUrl) { try { URL.revokeObjectURL(currentUrl); } catch (e) {} currentUrl = null; }
+    if (currentUrl) { try { URL.revokeObjectURL(currentUrl); } catch(e){} currentUrl = null; }
   }
 
   function b64ToBlob(b64, mime) {
-    var bin = atob(b64);
-    var arr = new Uint8Array(bin.length);
+    var bin = atob(b64), arr = new Uint8Array(bin.length);
     for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
     return new Blob([arr], { type: mime || 'audio/mpeg' });
   }
@@ -231,11 +214,8 @@ const STAGE_HTML = `<!doctype html>
       currentUrl = URL.createObjectURL(blob);
       player.src = currentUrl;
       var p = player.play();
-      if (p && p.catch) p.catch(function (err) { console.error('play() rej', err); finish(); });
-    } catch (err) {
-      console.error('audio play err', err);
-      finish();
-    }
+      if (p && p.catch) p.catch(function() { finish(); });
+    } catch(e) { finish(); }
   }
 
   function finish() {
@@ -245,21 +225,21 @@ const STAGE_HTML = `<!doctype html>
   }
 
   player.addEventListener('ended', finish);
-  player.addEventListener('error', function (e) {
-    console.error('audio element error', e, player.error);
-    finish();
-  });
+  player.addEventListener('error', function() { finish(); });
 
   function connect() {
-    var ws = new WebSocket(wsUrl);
-    ws.onmessage = function (e) {
+    ws = new WebSocket(wsUrl);
+    ws.onopen = function() {
+      if (!vIdle.paused && !readySent) setTimeout(sendReady, 2000);
+    };
+    ws.onmessage = function(e) {
       try {
         var msg = JSON.parse(e.data);
         if (msg.type === 'play') { queue.push(msg); playNext(); }
-      } catch (err) { console.error('msg parse err', err); }
+      } catch(e2) {}
     };
-    ws.onclose = function () { setTimeout(connect, 1000); };
-    ws.onerror = function () { /* onclose will fire next */ };
+    ws.onclose = function() { ws = null; setTimeout(connect, 1000); };
+    ws.onerror  = function() {};
   }
 
   connect();
@@ -272,31 +252,51 @@ export async function botStageRoute(app: FastifyInstance) {
   app.get('/bot-stage/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
     logger.info({ interviewId: id, ua: req.headers['user-agent'] }, 'bot-stage: HTML solicitado');
-    return reply
-      .type('text/html; charset=utf-8')
-      .header('cache-control', 'no-store')
-      .send(STAGE_HTML);
+    return reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').send(STAGE_HTML);
   });
 
   app.get('/bot-stage-diag', async () => botStageBus.diag());
 
-  // Sirve los assets del avatar (GIF animado o WebP estático según la clave).
-  app.get('/bot-stage-avatar/:key', async (req, reply) => {
+  // Sirve los videos MP4 con soporte correcto de Range requests.
+  // Sin esto el browser puede re-pedir el video completo varias veces → stutter.
+  app.get('/bot-stage-video/:key', async (req, reply) => {
     const { key } = req.params as { key: string };
-    const asset = assetCache.get(key);
-    if (!asset) return reply.code(404).send({ error: 'no_frame' });
+    const buf = videoCache.get(key);
+    if (!buf) return reply.code(404).send({ error: 'no_video' });
+
+    const rangeHeader = req.headers.range;
+    if (rangeHeader) {
+      const [startStr, endStr] = rangeHeader.replace('bytes=', '').split('-');
+      const start = parseInt(startStr, 10);
+      const end   = endStr ? parseInt(endStr, 10) : buf.length - 1;
+      const chunk = buf.slice(start, end + 1);
+      return reply
+        .code(206)
+        .type('video/mp4')
+        .header('content-range',  `bytes ${start}-${end}/${buf.length}`)
+        .header('accept-ranges',  'bytes')
+        .header('cache-control',  'public, max-age=3600')
+        .send(chunk);
+    }
+
     return reply
-      .type(asset.mime)
+      .type('video/mp4')
+      .header('accept-ranges', 'bytes')
       .header('cache-control', 'public, max-age=3600')
-      .send(asset.buf);
+      .send(buf);
   });
 
   app.get('/ws/bot-stage/:id', { websocket: true }, (socket: WebSocket, req) => {
     const { id } = req.params as { id: string };
     botStageBus.register(id, socket);
+    // La página manda {type:'ready'} cuando el canvas ya está corriendo (ver STAGE_HTML).
+    socket.on('message', (data: Buffer) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'ready') botStageBus.markReady(id);
+      } catch { /* noop */ }
+    });
   });
 
-  // Pre-generamos los frames optimizados al arrancar para que el primer bot
-  // los reciba al instante.
   warmAvatarCache().catch((err) => logger.warn({ err }, 'avatar warm falló'));
 }

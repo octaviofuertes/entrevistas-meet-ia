@@ -59,6 +59,7 @@ async function buildServer() {
     if (url.startsWith('/bot-stage/')) return;
     if (url.startsWith('/bot-stage-diag')) return;
     if (url.startsWith('/bot-stage-avatar')) return;
+    if (url.startsWith('/bot-stage-video')) return;
 
     const auth = req.headers.authorization;
     if (auth !== `Bearer ${config.ADMIN_TOKEN}`) {
