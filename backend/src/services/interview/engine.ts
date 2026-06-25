@@ -249,6 +249,7 @@ export class InterviewEngine {
     // la oración N, ya estamos sintetizando la N+1 (pipeline natural).
     const sentences = splitSentences(text);
     let totalDuration = 0;
+    let firstSentAt = 0; // cuándo se envió el primer chunk de audio
     for (let i = 0; i < sentences.length; i++) {
       if (this.finished) break;
       let audio: TTSResult | null = null;
@@ -267,9 +268,14 @@ export class InterviewEngine {
         mimeType: audio.mimeType,
         text: sentences[i],
       });
+      // Marcar cuándo el primer chunk fue enviado (el audio empieza a sonar desde aquí)
+      if (firstSentAt === 0) firstSentAt = Date.now();
     }
     if (totalDuration > 0) {
-      this.markBotSpeaking(totalDuration);
+      // Calcular la ventana de silencio desde el primer envío, no desde el último.
+      // Sin esto hay una "ventana muerta" de varios segundos post-audio donde los
+      // transcripts del candidato se ignoran por isBotSpeaking().
+      this.markBotSpeaking(totalDuration, firstSentAt || undefined);
       this.emit('audio_generated', { text, mimeType: 'audio/mpeg', durationMs: totalDuration, bytes: 0 });
     }
   }
@@ -278,9 +284,10 @@ export class InterviewEngine {
   // End-of-turn / half-duplex helpers
   // ============================================================
 
-  /** leIA va a estar "hablando" durante durationMs + una cola para el eco. */
-  private markBotSpeaking(durationMs: number) {
-    this.botSpeakingUntilMs = Date.now() + Math.max(800, durationMs) + BOT_ECHO_TAIL_MS;
+  /** leIA va a estar "hablando" desde `from` (o ahora) durante durationMs. */
+  private markBotSpeaking(durationMs: number, from?: number) {
+    const base = from ?? Date.now();
+    this.botSpeakingUntilMs = base + Math.max(800, durationMs) + BOT_ECHO_TAIL_MS;
   }
 
   private isBotSpeaking(): boolean {
@@ -378,7 +385,11 @@ export class InterviewEngine {
 
       // Sólo procesamos captions del candidato cuando leIA NO está hablando
       // (si no, sería su propio eco transcripto y atribuido al candidato).
-      if (evt.payload.speaker !== 'candidate' || this.isBotSpeaking()) return;
+      // En modo browser el micro es independiente del speaker (no hay eco real),
+      // así que no bloqueamos por isBotSpeaking — evita la ventana muerta donde
+      // el candidato habla pero sus transcripts se descartan.
+      const browserMode = this.interview?.mode === 'browser';
+      if (evt.payload.speaker !== 'candidate' || (!browserMode && this.isBotSpeaking())) return;
 
       if (evt.payload.isFinal && evt.payload.text.trim()) {
         if (this.answerStartedAtMs === 0) this.answerStartedAtMs = Date.now();
