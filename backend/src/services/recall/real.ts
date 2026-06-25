@@ -139,8 +139,36 @@ export class RealRecall implements RecallService {
     const words = input.text.split(/\s+/).filter(Boolean).length;
     const estimatedDurationMs = Math.max(1500, words * 320);
 
-    // Audio → bot-stage por WS. El bot lo reproduce con <audio> nativo y Recall
-    // lo streamea al Meet como su voz.
+    // Intento 1: output_audio API de Recall → audio va server-to-server,
+    // sin pasar por el tunnel ni competir con el encoder de Chrome.
+    // Resultado: audio nítido independientemente del video.
+    if (input.botId && !input.botId.startsWith('bot_err_')) {
+      try {
+        const res = await fetch(`${this.endpoint}/bot/${input.botId}/output_audio/`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Token ${config.RECALL_API_KEY}`,
+          },
+          body: JSON.stringify({ kind: 'mp3', data: input.audioBase64 }),
+        });
+        if (res.ok) {
+          // Solo mandamos la señal visual al bot-stage (sin audio, sin tunnel).
+          botStageBus.send(input.interviewId, { type: 'talking', durationMs: estimatedDurationMs });
+          logger.info(
+            { interviewId: input.interviewId, botId: input.botId, durationMs: estimatedDurationMs },
+            'audio via output_audio (server-side, sin tunnel)'
+          );
+          return { playbackId, durationMs: estimatedDurationMs };
+        }
+        const errText = await res.text();
+        logger.warn({ status: res.status, err: errText.slice(0, 200) }, 'output_audio falló, fallback a bot-stage WS');
+      } catch (err) {
+        logger.warn({ err }, 'output_audio error, fallback a bot-stage WS');
+      }
+    }
+
+    // Fallback: audio por WS a través del tunnel (comportamiento anterior).
     botStageBus.send(input.interviewId, {
       type: 'play',
       mimeType: input.mimeType,
@@ -148,7 +176,7 @@ export class RealRecall implements RecallService {
     });
     logger.info(
       { interviewId: input.interviewId, bytes: input.audioBase64.length, connected: botStageBus.isConnected(input.interviewId) },
-      'bot-stage: audio enviado'
+      'audio via bot-stage WS (fallback)'
     );
     return { playbackId, durationMs: estimatedDurationMs };
   }

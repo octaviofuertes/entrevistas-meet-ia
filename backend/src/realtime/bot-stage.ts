@@ -38,7 +38,10 @@ export async function warmAvatarCache(): Promise<void> {
  *   WS  /ws/bot-stage/:id       → canal de audio
  */
 
-type StageMsg = { type: 'play'; mimeType: string; audioBase64: string };
+type StageMsg =
+  | { type: 'play'; mimeType: string; audioBase64: string }
+  /** Solo visual: output_audio maneja el audio; este msg solo sincroniza la animación. */
+  | { type: 'talking'; durationMs: number };
 
 class BotStageBus {
   private clients = new Map<string, WebSocket>();
@@ -156,6 +159,7 @@ const STAGE_HTML = `<!doctype html>
   var vIdle  = document.getElementById('v-idle');
   var vTalk  = document.getElementById('v-talk');
   var queue = [], playing = false, currentUrl = null, talking = false;
+  var talkingTimer = null, talkingUntilMs = 0;
   var ws = null, readySent = false;
 
   // Idle a 40% velocidad → 12fps efectivos para el encoder de Recall (en vez de 30fps).
@@ -236,6 +240,17 @@ const STAGE_HTML = `<!doctype html>
       try {
         var msg = JSON.parse(e.data);
         if (msg.type === 'play') { queue.push(msg); playNext(); }
+        // output_audio maneja el audio server-side; acá solo animamos la boca.
+        // Con sentence-streaming llegan varios msgs rápidamente → acumulamos duraciones
+        // para que la animación no se corte entre oraciones.
+        if (msg.type === 'talking') {
+          setTalking(true);
+          var now = Date.now();
+          talkingUntilMs = Math.max(talkingUntilMs, now) + msg.durationMs;
+          var delay = talkingUntilMs - Date.now();
+          if (talkingTimer) clearTimeout(talkingTimer);
+          talkingTimer = setTimeout(function() { talkingTimer = null; if (!playing) setTalking(false); }, delay);
+        }
       } catch(e2) {}
     };
     ws.onclose = function() { ws = null; setTimeout(connect, 1000); };

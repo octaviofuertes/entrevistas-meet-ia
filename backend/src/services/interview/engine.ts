@@ -12,7 +12,7 @@ import type {
   TranscriptFragment,
 } from '../../types';
 import { getLeia } from '../leia';
-import { getTTS, type TTSService } from '../tts';
+import { getTTS, type TTSService, type TTSResult } from '../tts';
 import { getRecall } from '../recall';
 import { computeQualityDistribution, computeSentimentFallback, isEmptySentiment } from './analytics';
 
@@ -227,34 +227,47 @@ export class InterviewEngine {
     // del turno anterior que pudiera haber quedado bufferizado.
     this.resetAnswerState();
 
-    let audio = opts?.preTtsAudio;
-    if (!audio) {
-      try {
-        audio = await this.tts.synthesize(text);
-      } catch (err) {
-        logger.warn({ err }, 'TTS falló para este turno; sigo sin audio');
+    // Si ya tenemos audio pre-sintetizado (saludo inicial) lo usamos directo.
+    if (opts?.preTtsAudio) {
+      const audio = opts.preTtsAudio;
+      this.emit('audio_generated', { text, mimeType: audio.mimeType, durationMs: audio.durationMs, bytes: audio.bytes });
+      if (this.botId && !opts.skipBotPlayback) {
+        await this.recall.playAudio({ interviewId: this.interviewId, botId: this.botId, audioBase64: audio.audioBase64, mimeType: audio.mimeType, text });
+        this.markBotSpeaking(audio.durationMs);
       }
-    }
-    if (audio) {
-      this.emit('audio_generated', {
-        text,
-        mimeType: audio.mimeType,
-        durationMs: audio.durationMs,
-        bytes: audio.bytes,
-      });
+      return;
     }
 
-    if (this.botId && !opts?.skipBotPlayback && audio) {
+    if (opts?.skipBotPlayback || !this.botId) return;
+
+    // Sentence streaming: TTS oración por oración, la primera empieza a sonar
+    // ~1s después de que leIA genera el texto en vez de esperar TTS del texto completo.
+    // playAudio() con output_audio es fire-and-forget → mientras Recall reproduce
+    // la oración N, ya estamos sintetizando la N+1 (pipeline natural).
+    const sentences = splitSentences(text);
+    let totalDuration = 0;
+    for (let i = 0; i < sentences.length; i++) {
+      if (this.finished) break;
+      let audio: TTSResult | null = null;
+      try {
+        audio = await this.tts.synthesize(sentences[i]);
+      } catch (err) {
+        logger.warn({ err, chunk: i }, 'TTS chunk falló, saltando oración');
+        continue;
+      }
+      if (!audio || this.finished) break;
+      totalDuration += audio.durationMs;
       await this.recall.playAudio({
         interviewId: this.interviewId,
         botId: this.botId,
         audioBase64: audio.audioBase64,
         mimeType: audio.mimeType,
-        text,
+        text: sentences[i],
       });
-      // Marcamos que leIA está hablando para ignorar su eco en el micrófono
-      // del candidato durante este audio + una cola corta.
-      this.markBotSpeaking(audio.durationMs);
+    }
+    if (totalDuration > 0) {
+      this.markBotSpeaking(totalDuration);
+      this.emit('audio_generated', { text, mimeType: 'audio/mpeg', durationMs: totalDuration, bytes: 0 });
     }
   }
 
@@ -691,4 +704,18 @@ function isNeutralFiller(s: string): boolean {
   if (t.length > 40) return false;
   if (BANNED_FILLER_PATTERNS.test(t)) return false;
   return true;
+}
+
+/**
+ * Divide el texto en oraciones para sentence-streaming TTS.
+ * Separa por `.`, `!`, `?` seguidos de espacio, manteniendo el signo.
+ * Si el texto es corto (<= 60 chars) lo devuelve como un único chunk.
+ */
+function splitSentences(text: string): string[] {
+  if (text.length <= 60) return [text];
+  const parts = text
+    .split(/(?<=[.!?…])\s+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  return parts.length > 0 ? parts : [text];
 }
