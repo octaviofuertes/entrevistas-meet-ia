@@ -713,8 +713,10 @@ function isNeutralFiller(s: string): boolean {
  */
 function splitSentences(text: string): string[] {
   if (text.length <= 60) return [text];
+  // Usamos un centinela en lugar de lookbehind para compatibilidad máxima
   const parts = text
-    .split(/(?<=[.!?…])\s+/)
+    .replace(/([.!?])\s+/g, '$1\x1E')
+    .split('\x1E')
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
   return parts.length > 0 ? parts : [text];
