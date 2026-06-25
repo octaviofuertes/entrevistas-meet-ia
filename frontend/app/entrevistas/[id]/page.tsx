@@ -13,6 +13,8 @@ import {
 import { DIMENSION_LABELS } from '@/lib/types';
 import type { InterviewDetail, TTSDriver } from '@/lib/types';
 
+const FRONTEND_URL = process.env.NEXT_PUBLIC_FRONTEND_URL ?? 'http://localhost:3000';
+
 const TTS_OPTIONS: Array<{ value: TTSDriver; label: string }> = [
   { value: 'gemini', label: 'Gemini TTS' },
   { value: 'edge', label: 'Microsoft TTS' },
@@ -30,6 +32,7 @@ export default function EntrevistaDetallePage() {
   const [selectedTtsDriver, setSelectedTtsDriver] = useState<TTSDriver>('gemini');
   const [savingTts, setSavingTts] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const load = async () => {
     try {
@@ -49,9 +52,16 @@ export default function EntrevistaDetallePage() {
     load();
   }, [params.id]);
 
+  const isBrowser = data?.mode === 'browser';
+  const salaUrl = `${FRONTEND_URL}/sala/${params.id}`;
+
   async function onStart() {
-    if (!data?.meetUrl) return alert('No hay link de Meet configurado');
-    window.open(data.meetUrl, '_blank');
+    // Para modo browser: no necesitamos meetUrl — el engine arranca cuando el candidato se conecta.
+    // Para modo meet: abrir Google Meet y luego iniciar el bot.
+    if (!isBrowser) {
+      if (!data?.meetUrl) return alert('No hay link de Meet configurado');
+      window.open(data.meetUrl, '_blank');
+    }
     try {
       setStarting(true);
       await apiStartInterview(params.id, { ttsDriver: selectedTtsDriver });
@@ -61,6 +71,12 @@ export default function EntrevistaDetallePage() {
     } finally {
       setStarting(false);
     }
+  }
+
+  async function copySalaUrl() {
+    await navigator.clipboard.writeText(salaUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }
 
   async function onSelectTtsDriver(ttsDriver: TTSDriver) {
@@ -107,7 +123,12 @@ export default function EntrevistaDetallePage() {
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <StatusBadge status={data.status} />
-            {(data.status === 'agendada' || data.status === 'en_curso') && (
+            {isBrowser && data.status === 'agendada' && (
+              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-3 py-1 rounded-full font-medium">
+                Sala nativa
+              </span>
+            )}
+            {(data.status === 'agendada' || data.status === 'en_curso') && !isBrowser && (
               <button onClick={onStart} className="btn-primary" disabled={starting}>
                 {starting ? 'Iniciando...' : 'Iniciar entrevista'}
               </button>
@@ -126,11 +147,68 @@ export default function EntrevistaDetallePage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
+          {/* Banner sala browser cuando está agendada */}
+          {isBrowser && data.status === 'agendada' && (
+            <div className="card bg-blue-50 border border-blue-200">
+              <h2 className="font-semibold text-blue-900 mb-2">Link de la sala para el candidato</h2>
+              <p className="text-sm text-blue-700 mb-3">
+                Compartí este link. La entrevista empieza automáticamente cuando el candidato se conecte.
+              </p>
+              <div className="flex items-center gap-2">
+                <input
+                  readOnly
+                  className="flex-1 font-mono text-sm bg-white border border-blue-200 rounded-lg px-3 py-2 text-blue-800"
+                  value={salaUrl}
+                  onClick={(e) => (e.target as HTMLInputElement).select()}
+                />
+                <button
+                  onClick={copySalaUrl}
+                  className="shrink-0 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors"
+                >
+                  {copied ? 'Copiado ✓' : 'Copiar'}
+                </button>
+              </div>
+              <div className="mt-3 flex gap-2">
+                <a
+                  href={salaUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs text-blue-600 hover:underline"
+                >
+                  Abrir sala (vista candidato) →
+                </a>
+              </div>
+            </div>
+          )}
+
+          {/* Banner sala en curso */}
+          {isBrowser && data.status === 'en_curso' && (
+            <div className="card bg-green-50 border border-green-200">
+              <h2 className="font-semibold text-green-900 mb-1">Sala en curso</h2>
+              <p className="text-xs text-green-700 mb-3">
+                leIA está entrevistando al candidato en la sala nativa.
+              </p>
+              <div className="flex gap-2">
+                <a
+                  href={salaUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn-primary text-sm"
+                >
+                  Ver sala
+                </a>
+                <button onClick={load} className="btn-secondary text-sm">Refrescar</button>
+              </div>
+            </div>
+          )}
+
           <div className="card">
             <h2 className="text-lg font-semibold mb-3">Turnos pregunta/respuesta</h2>
             {data.turns.length === 0 ? (
               <p className="text-sm text-slate-500">
-                Todavia no hubo turnos. Inicia la entrevista para que leIA arranque.
+                {isBrowser
+                  ? 'Todavía no hubo turnos. El candidato debe conectarse a la sala para que leIA arranque.'
+                  : 'Todavia no hubo turnos. Inicia la entrevista para que leIA arranque.'}
               </p>
             ) : (
               <div className="space-y-4">
@@ -202,13 +280,14 @@ export default function EntrevistaDetallePage() {
               <Row label="Empresa" value={data.job?.company ?? '-'} />
               <Row label="Candidato" value={data.candidate?.name ?? '-'} />
               <Row label="Email" value={data.candidate?.email ?? '-'} />
+              <Row label="Modo" value={isBrowser ? '🌐 Sala browser' : '📹 Google Meet'} />
               <Row label="Voz" value={selectedVoiceLabel} />
               <Row label="Turnos" value={data.turns.length} />
               <Row label="Evaluaciones" value={data.evaluations.length} />
               <Row label="Creada" value={new Date(data.createdAt).toLocaleString('es-AR')} />
               {data.startedAt && <Row label="Iniciada" value={new Date(data.startedAt).toLocaleString('es-AR')} />}
               {data.endedAt && <Row label="Finalizada" value={new Date(data.endedAt).toLocaleString('es-AR')} />}
-              {data.durationSec && <Row label="Duracion" value={`${Math.round(data.durationSec / 60)} min`} />}
+              {data.durationSec != null && <Row label="Duracion" value={`${Math.round(data.durationSec / 60)} min`} />}
             </dl>
           </div>
 
@@ -247,25 +326,45 @@ export default function EntrevistaDetallePage() {
             </div>
           </div>
 
-          <div className="card">
-            <h3 className="font-semibold mb-2">Google Meet</h3>
-            <p className="text-xs text-slate-500 mb-2">
-              Recall.ai entra como bot a esta reunion y captura los captions nativos.
-            </p>
-            <a
-              href={data.meetUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="block font-mono text-xs text-primary-600 hover:underline break-all"
-            >
-              {data.meetUrl}
-            </a>
-            {data.recallBotId && (
-              <p className="mt-2 text-[10px] text-slate-500">Bot ID: {data.recallBotId}</p>
-            )}
-          </div>
+          {/* Panel Google Meet — solo para entrevistas Meet */}
+          {!isBrowser && (
+            <div className="card">
+              <h3 className="font-semibold mb-2">Google Meet</h3>
+              <p className="text-xs text-slate-500 mb-2">
+                Recall.ai entra como bot a esta reunion y captura los captions nativos.
+              </p>
+              <a
+                href={data.meetUrl || '#'}
+                target="_blank"
+                rel="noreferrer"
+                className="block font-mono text-xs text-primary-600 hover:underline break-all"
+              >
+                {data.meetUrl || '—'}
+              </a>
+              {data.recallBotId && (
+                <p className="mt-2 text-[10px] text-slate-500">Bot ID: {data.recallBotId}</p>
+              )}
+            </div>
+          )}
 
-          {data.status === 'en_curso' && (
+          {/* Panel sala browser — sidebar */}
+          {isBrowser && (
+            <div className="card">
+              <h3 className="font-semibold mb-2">Sala browser</h3>
+              <p className="text-xs text-slate-500 mb-2">
+                Sin bots externos. El candidato accede directamente por este link.
+              </p>
+              <button
+                onClick={copySalaUrl}
+                className="w-full text-left font-mono text-xs text-primary-600 hover:underline break-all"
+              >
+                {salaUrl}
+              </button>
+            </div>
+          )}
+
+          {/* En curso Meet */}
+          {data.status === 'en_curso' && !isBrowser && (
             <div className="card bg-primary-50 border-primary-200">
               <h3 className="font-semibold mb-2">Entrevista en curso</h3>
               <p className="text-xs text-slate-600 mb-3">
