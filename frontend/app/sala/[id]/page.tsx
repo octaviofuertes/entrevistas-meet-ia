@@ -67,17 +67,22 @@ export default function SalaPage() {
   useEffect(() => { phaseRef.current    = phase;    }, [phase]);
   useEffect(() => { cameraOnRef.current = cameraOn; }, [cameraOn]);
 
-  // Recording
-  const recorderRef  = useRef<MediaRecorder | null>(null);
-  const chunksRef    = useRef<Blob[]>([]);
-  const mimeTypeRef  = useRef('');
+  // Recording — composite canvas (leIA + PiP) + audio mix
+  const recorderRef      = useRef<MediaRecorder | null>(null);
+  const chunksRef        = useRef<Blob[]>([]);
+  const mimeTypeRef      = useRef('');
+  const canvasRef        = useRef<HTMLCanvasElement | null>(null);
+  const animFrameRef     = useRef<number>(0);
+  const leiaSpeakingRef  = useRef(false); // stable ref para el loop de canvas
 
   // WS / timer
   const wsRef    = useRef<WebSocket | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // AudioContext — created on user gesture to unlock autoplay
-  const audioCtxRef = useRef<AudioContext | null>(null);
+  const audioCtxRef     = useRef<AudioContext | null>(null);
+  const masterGainRef   = useRef<GainNode | null>(null);
+  const leiaAudioDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
 
   // Audio queue
   const audioQueueRef = useRef<Array<{ mimeType: string; audioBase64: string }>>([]);
@@ -140,9 +145,9 @@ export default function SalaPage() {
     const ctx   = audioCtxRef.current;
 
     if (!queue.length || !ctx) {
-      playingRef.current = false;
+      playingRef.current    = false;
+      leiaSpeakingRef.current = false;
       setLeiaSpeaking(false);
-      // switch to idle
       if (idleRef.current) { idleRef.current.style.display = 'block'; idleRef.current.play().catch(() => {}); }
       if (talkRef.current) { talkRef.current.style.display = 'none';  talkRef.current.pause(); }
       if (micOnRef.current) startListeningRef.current();
@@ -150,12 +155,12 @@ export default function SalaPage() {
     }
 
     const item = queue.shift()!;
-    playingRef.current = true;
+    playingRef.current      = true;
+    leiaSpeakingRef.current = true;
     setLeiaSpeaking(true);
     setLeiaThinking(false);
     stopListeningRef.current();
 
-    // Switch to talking video
     if (idleRef.current) { idleRef.current.style.display = 'none';  idleRef.current.pause(); }
     if (talkRef.current) { talkRef.current.style.display = 'block'; talkRef.current.currentTime = 0; talkRef.current.play().catch(() => {}); }
 
@@ -175,7 +180,8 @@ export default function SalaPage() {
       (buffer) => {
         const source = ctx.createBufferSource();
         source.buffer = buffer;
-        source.connect(ctx.destination);
+        // Rutar por masterGain → speaker + (si graba) destino de grabación
+        source.connect(masterGainRef.current ?? ctx.destination);
         source.onended = () => setTimeout(playNext, 40);
         source.start(0);
       },
@@ -197,10 +203,13 @@ export default function SalaPage() {
     lobbyStream.current?.getTracks().forEach(t => t.stop());
     lobbyStream.current = null;
 
-    // Unlock AudioContext on user gesture
+    // Unlock AudioContext en el gesto del usuario + crear masterGain
     const ctx = new (window.AudioContext ?? (window as any).webkitAudioContext)() as AudioContext;
     if (ctx.state === 'suspended') await ctx.resume();
     audioCtxRef.current = ctx;
+    const gain = ctx.createGain();
+    gain.connect(ctx.destination);
+    masterGainRef.current = gain;
 
     setPhase('running');
     phaseRef.current = 'running';
@@ -215,19 +224,6 @@ export default function SalaPage() {
       stream.getVideoTracks().forEach(t => (t.enabled = cameraOnRef.current));
       stream.getAudioTracks().forEach(t => (t.enabled  = micOnRef.current));
       setCurrentStream(stream);
-
-      // Start recording
-      const mime = getSupportedMimeType();
-      mimeTypeRef.current = mime;
-      if (mime) {
-        try {
-          const mr = new MediaRecorder(stream, { mimeType: mime });
-          mr.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
-          mr.start(3000);
-          recorderRef.current = mr;
-          setRecording(true);
-        } catch { /* recording optional */ }
-      }
     } catch { /* camera/mic optional */ }
 
     // Preload talk video
@@ -256,45 +252,136 @@ export default function SalaPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  // ── End call + download recording ─────────────────────────────────────────
+  // ── Recording: canvas compuesto (leIA + PiP) + audio mixeado ─────────────
+  const startRecording = useCallback(() => {
+    if (recorderRef.current) return; // ya grabando
+
+    const mime = getSupportedMimeType();
+    if (!mime) return;
+    mimeTypeRef.current = mime;
+    chunksRef.current   = [];
+
+    // Canvas 1280×720 que compone leIA + PiP del candidato
+    const canvas = document.createElement('canvas');
+    canvas.width  = 1280;
+    canvas.height = 720;
+    const ctx2d = canvas.getContext('2d')!;
+    canvasRef.current = canvas;
+
+    const drawFrame = () => {
+      // Fondo negro
+      ctx2d.fillStyle = '#111';
+      ctx2d.fillRect(0, 0, 1280, 720);
+
+      // Video de leIA (idle o talk según estado)
+      const leiaVid = leiaSpeakingRef.current ? talkRef.current : idleRef.current;
+      if (leiaVid && leiaVid.readyState >= 2) {
+        try { ctx2d.drawImage(leiaVid, 0, 0, 1280, 720); } catch { /* noop */ }
+      }
+
+      // PiP del candidato (bottom-right, 202×114)
+      if (pipRef.current && pipRef.current.readyState >= 2) {
+        const pw = 202, ph = 114, m = 12;
+        ctx2d.save();
+        ctx2d.translate(1280 - m - pw / 2, 720 - m - ph / 2); // center of PiP
+        ctx2d.scale(-1, 1);                                     // mirror candidate
+        ctx2d.drawImage(pipRef.current, -pw / 2, -ph / 2, pw, ph);
+        ctx2d.restore();
+        // borde blanco
+        ctx2d.strokeStyle = 'rgba(255,255,255,0.25)';
+        ctx2d.lineWidth   = 1;
+        ctx2d.strokeRect(1280 - m - pw, 720 - m - ph, pw, ph);
+      }
+
+      animFrameRef.current = requestAnimationFrame(drawFrame);
+    };
+    drawFrame();
+
+    // Stream del canvas a 25 fps
+    const canvasStream = canvas.captureStream(25);
+
+    // Audio: leIA TTS (AudioContext) + micrófono del candidato
+    const audioCtx = audioCtxRef.current;
+    const master   = masterGainRef.current;
+    if (audioCtx && master) {
+      const leiaDest = audioCtx.createMediaStreamDestination();
+      master.connect(leiaDest);
+      leiaAudioDestRef.current = leiaDest;
+      // leIA TTS → grabación
+      leiaDest.stream.getAudioTracks().forEach(t => canvasStream.addTrack(t));
+      // Micrófono → grabación (NO al speaker, evita eco)
+      if (streamRef.current) {
+        const micSrc  = audioCtx.createMediaStreamSource(streamRef.current);
+        const micGain = audioCtx.createGain();
+        micSrc.connect(micGain);
+        micGain.connect(leiaDest);
+      }
+    }
+
+    try {
+      const mr = new MediaRecorder(canvasStream, { mimeType: mime });
+      mr.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+      mr.start(3000);
+      recorderRef.current = mr;
+      setRecording(true);
+    } catch {
+      cancelAnimationFrame(animFrameRef.current);
+      canvasRef.current = null;
+    }
+  }, []);
+
+  const stopRecording = useCallback(async (download = true) => {
+    cancelAnimationFrame(animFrameRef.current);
+    canvasRef.current = null;
+
+    const mr = recorderRef.current;
+    recorderRef.current = null;
+    setRecording(false);
+
+    if (mr && mr.state !== 'inactive') {
+      mr.stop();
+      await new Promise<void>(res => { mr.onstop = () => res(); });
+    }
+
+    // Desconectar leIA audio del destino de grabación
+    if (leiaAudioDestRef.current && masterGainRef.current) {
+      try { masterGainRef.current.disconnect(leiaAudioDestRef.current); } catch { /* noop */ }
+      leiaAudioDestRef.current = null;
+    }
+
+    if (!download) return;
+    const blob = new Blob(chunksRef.current, { type: mimeTypeRef.current || 'video/webm' });
+    if (blob.size < 5000) return;
+
+    const url = URL.createObjectURL(blob);
+    const a   = document.createElement('a');
+    a.href     = url;
+    const ext  = mimeTypeRef.current.includes('mp4') ? 'mp4' : 'webm';
+    a.download = `entrevista-${id.slice(0, 8)}.${ext}`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 8000);
+
+    fetch(`${API_URL}/api/sala/${id}/recording`, {
+      method: 'POST', headers: { 'Content-Type': blob.type }, body: blob,
+    }).catch(() => {});
+  }, [id]);
+
+  // ── End call ──────────────────────────────────────────────────────────────
   const endCall = useCallback(async () => {
     if (phaseRef.current === 'finished') return;
     setPhase('finished');
     phaseRef.current = 'finished';
     stopListeningRef.current();
     if (timerRef.current) clearInterval(timerRef.current);
-    audioCtxRef.current?.close().catch(() => {});
     audioQueueRef.current = [];
 
-    const mr = recorderRef.current;
-    if (mr && mr.state !== 'inactive') {
-      mr.stop();
-      await new Promise<void>(res => { mr.onstop = () => res(); });
+    // Si estaba grabando, detener y descargar
+    if (recorderRef.current) await stopRecording(true);
 
-      const blob = new Blob(chunksRef.current, { type: mimeTypeRef.current || 'video/webm' });
-      if (blob.size > 5000) {
-        // Download recording locally
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        const ext = mimeTypeRef.current.includes('mp4') ? 'mp4' : 'webm';
-        a.download = `entrevista-${id.slice(0, 8)}.${ext}`;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 5000);
-
-        // Upload to backend (optional, fire-and-forget)
-        fetch(`${API_URL}/api/sala/${id}/recording`, {
-          method: 'POST',
-          headers: { 'Content-Type': blob.type },
-          body: blob,
-        }).catch(() => {});
-      }
-    }
-
-    setRecording(false);
+    audioCtxRef.current?.close().catch(() => {});
     streamRef.current?.getTracks().forEach(t => t.stop());
     wsRef.current?.close();
-  }, [id]);
+  }, [stopRecording]);
 
   // ── Mic toggle ────────────────────────────────────────────────────────────
   const toggleMic = useCallback(() => {
@@ -317,13 +404,14 @@ export default function SalaPage() {
     streamRef.current?.getVideoTracks().forEach(t => (t.enabled = next));
   }, []);
 
-  // ── Recording pause/resume ────────────────────────────────────────────────
+  // ── Rec toggle ────────────────────────────────────────────────────────────
   const toggleRec = useCallback(() => {
-    const mr = recorderRef.current;
-    if (!mr) return;
-    if (mr.state === 'recording') { mr.pause();  setRecording(false); }
-    else if (mr.state === 'paused') { mr.resume(); setRecording(true);  }
-  }, []);
+    if (!recorderRef.current) {
+      startRecording();
+    } else {
+      stopRecording(true);
+    }
+  }, [startRecording, stopRecording]);
 
   // ── Cleanup ───────────────────────────────────────────────────────────────
   useEffect(() => () => {
