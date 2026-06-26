@@ -50,14 +50,15 @@ export default function SalaPage() {
   const lobbyStream = useRef<MediaStream | null>(null);
 
   // UI state
-  const [leiaSpeaking, setLeiaSpeaking] = useState(false);
-  const [leiaThinking, setLeiaThinking] = useState(false);
-  const [subtitle,     setSubtitle]     = useState('');
-  const [showCC,       setShowCC]       = useState(true);
-  const [micOn,        setMicOn]        = useState(true);
-  const [cameraOn,     setCameraOn]     = useState(true);
-  const [elapsed,      setElapsed]      = useState(0);
-  const [recording,    setRecording]    = useState(false);
+  const [leiaSpeaking,  setLeiaSpeaking]  = useState(false);
+  const [leiaThinking,  setLeiaThinking]  = useState(false);
+  const [subtitle,      setSubtitle]      = useState('');
+  const [showCC,        setShowCC]        = useState(true);
+  const [micOn,         setMicOn]         = useState(true);
+  const [cameraOn,      setCameraOn]      = useState(true);
+  const [elapsed,       setElapsed]       = useState(0);
+  const [recording,     setRecording]     = useState(false);
+  const [reportsReady,  setReportsReady]  = useState<number[]>([]); // kinds recibidos
 
   // Stable refs
   const micOnRef    = useRef(micOn);
@@ -243,6 +244,9 @@ export default function SalaPage() {
         if (msg.type === 'question') setSubtitle(msg.text ?? '');
         if (msg.type === 'status' && msg.status === 'en_curso') setLeiaThinking(true);
         if (msg.type === 'finished') endCall();
+        if (msg.type === 'report_ready') {
+          setReportsReady(prev => prev.includes(msg.kind) ? prev : [...prev, msg.kind as number]);
+        }
       } catch { /* noop */ }
     };
     const ka = setInterval(() => {
@@ -375,12 +379,17 @@ export default function SalaPage() {
     if (timerRef.current) clearInterval(timerRef.current);
     audioQueueRef.current = [];
 
-    // Si estaba grabando, detener y descargar
     if (recorderRef.current) await stopRecording(true);
-
     audioCtxRef.current?.close().catch(() => {});
     streamRef.current?.getTracks().forEach(t => t.stop());
-    wsRef.current?.close();
+
+    // Notificar al backend que el candidato colgó (dispara stop + generateReports).
+    // Mantenemos el WS abierto para recibir report_ready; lo cerramos tras 90s.
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'hangup' }));
+      setTimeout(() => { ws.readyState === WebSocket.OPEN && ws.close(); }, 90_000);
+    }
   }, [stopRecording]);
 
   // ── Mic toggle ────────────────────────────────────────────────────────────
@@ -432,7 +441,7 @@ export default function SalaPage() {
   // ── Phase routing ─────────────────────────────────────────────────────────
   if (phase === 'loading')  return <Loading />;
   if (phase === 'error')    return <ErrorScreen msg={errMsg} />;
-  if (phase === 'finished') return <FinishedScreen info={info} elapsed={elapsed} fmt={fmt} />;
+  if (phase === 'finished') return <FinishedScreen info={info} elapsed={elapsed} fmt={fmt} interviewId={id} reportsReady={reportsReady} />;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // LOBBY
@@ -639,19 +648,81 @@ function ErrorScreen({ msg }: { msg: string }) {
   );
 }
 
-function FinishedScreen({ info, elapsed, fmt }: { info: SalaInfo | null; elapsed: number; fmt: (s: number) => string }) {
+const ADMIN_URL = process.env.NEXT_PUBLIC_FRONTEND_URL ?? 'http://localhost:3000';
+
+function FinishedScreen({
+  info, elapsed, fmt, interviewId, reportsReady,
+}: {
+  info: SalaInfo | null;
+  elapsed: number;
+  fmt: (s: number) => string;
+  interviewId: string;
+  reportsReady: number[];
+}) {
+  const hasReport = reportsReady.length > 0;
+  const [dots, setDots] = React.useState('');
+  React.useEffect(() => {
+    if (hasReport) return;
+    const t = setInterval(() => setDots(d => d.length >= 3 ? '' : d + '.'), 500);
+    return () => clearInterval(t);
+  }, [hasReport]);
+
   return (
-    <div style={{ position: 'fixed', inset: 0, background: '#000', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 24, fontFamily: 'Google Sans, Roboto, sans-serif', color: '#fff', padding: 24 }}>
+    <div style={{ position: 'fixed', inset: 0, background: '#111', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 28, fontFamily: 'Google Sans, Roboto, sans-serif', color: '#fff', padding: 24 }}>
+      {/* Checkmark */}
       <div style={{ width: 72, height: 72, borderRadius: '50%', background: '#1a3a1f', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <svg width="36" height="36" viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="#34a853" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none">
+          <path d="M5 13l4 4L19 7" stroke="#34a853" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
       </div>
-      <div style={{ textAlign: 'center' }}>
-        <h1 style={{ fontSize: 22, fontWeight: 400, margin: '0 0 8px' }}>Entrevista finalizada</h1>
-        <p style={{ color: '#9aa0a6', margin: 0 }}>
-          Gracias{info?.candidateName ? `, ${info.candidateName}` : ''}. El equipo de {info?.company ?? 'la empresa'} se pondrá en contacto pronto.
+
+      {/* Texto de cierre */}
+      <div style={{ textAlign: 'center', maxWidth: 420 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 400, margin: '0 0 10px' }}>Entrevista finalizada</h1>
+        <p style={{ color: '#9aa0a6', margin: 0, lineHeight: 1.5 }}>
+          Gracias{info?.candidateName ? `, ${info.candidateName}` : ''}. El equipo de{' '}
+          <strong style={{ color: '#e8eaed' }}>{info?.company ?? 'la empresa'}</strong> se pondrá en contacto pronto.
         </p>
-        {elapsed > 0 && <p style={{ color: '#5f6368', fontSize: 13, marginTop: 8 }}>Duración: {fmt(elapsed)}</p>}
+        {elapsed > 0 && (
+          <p style={{ color: '#5f6368', fontSize: 13, marginTop: 8 }}>Duración: {fmt(elapsed)}</p>
+        )}
       </div>
+
+      {/* Estado del informe */}
+      <div style={{ textAlign: 'center' }}>
+        {hasReport ? (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+            <p style={{ color: '#34a853', fontWeight: 500, margin: 0 }}>
+              ✓ Informe generado
+            </p>
+            <a
+              href={`${ADMIN_URL}/entrevistas/${interviewId}/informe`}
+              style={{ display: 'inline-block', padding: '10px 24px', background: '#1a73e8', color: '#fff', borderRadius: 6, textDecoration: 'none', fontSize: 14, fontWeight: 500 }}
+            >
+              Ver informe
+            </a>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: '#9aa0a6' }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" style={{ animation: 'spin 1.2s linear infinite' }}>
+                <circle cx="12" cy="12" r="9" stroke="#5f6368" strokeWidth="2.5" strokeDasharray="30 10" strokeLinecap="round"/>
+              </svg>
+              <span style={{ fontSize: 14 }}>Generando informe{dots}</span>
+            </div>
+            <p style={{ fontSize: 12, color: '#5f6368', margin: 0 }}>
+              leIA está analizando la entrevista. Esto tarda unos segundos.
+            </p>
+            <a
+              href={`${ADMIN_URL}/entrevistas/${interviewId}`}
+              style={{ fontSize: 12, color: '#8ab4f8', textDecoration: 'none', marginTop: 4 }}
+            >
+              Ver detalle de la entrevista →
+            </a>
+          </div>
+        )}
+      </div>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   );
 }

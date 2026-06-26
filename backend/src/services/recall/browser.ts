@@ -17,7 +17,8 @@ type SalaMsg =
   | { type: 'talking'; durationMs: number }
   | { type: 'question'; text: string; index: number; isClosing?: boolean }
   | { type: 'status'; status: string; reason?: string }
-  | { type: 'finished' };
+  | { type: 'finished' }
+  | { type: 'report_ready'; kind: number };
 
 class BrowserSalaBus {
   private clients = new Map<string, WebSocket>();
@@ -159,6 +160,11 @@ export class BrowserRecall implements RecallService {
   /** Envía un status update al frontend. */
   forwardStatus(status: string, reason?: string) {
     browserSalaBus.send(this.interviewId, { type: 'status', status, reason });
+  }
+
+  /** Notifica al frontend que un informe está listo. */
+  forwardReportReady(kind: number) {
+    browserSalaBus.send(this.interviewId, { type: 'report_ready', kind });
   }
 }
 

@@ -635,6 +635,9 @@ export class InterviewEngine {
       } else if (type === 'interview_status') {
         const p = payload as any;
         br.forwardStatus(p.status, p.reason);
+      } else if (type === 'report_ready') {
+        const p = payload as any;
+        br.forwardReportReady(p.kind as number);
       }
     }
   }
