@@ -40,6 +40,10 @@ const ConfigSchema = z.object({
   RECALL_API_KEY: z.string().optional().default(''),
   RECALL_REGION: z.string().default('us-east-1'),
   RECALL_BOT_NAME: z.string().default('leIA · Entrevistadora'),
+  // Variante de hardware del bot (web | web_4_core | web_gpu).
+  // web_4_core = 2250 millicores + 5250 MB — elimina el cuello de botella de CPU
+  // web_gpu    = 6000 millicores + 13250 MB + WebGL — si se necesita rendering GL
+  RECALL_BOT_VARIANT: z.enum(['web', 'web_4_core', 'web_gpu']).default('web'),
 
   // ElevenLabs - TTS.
   TTS_DRIVER: z.enum(['mock', 'elevenlabs', 'gemini', 'edge']).default('mock'),

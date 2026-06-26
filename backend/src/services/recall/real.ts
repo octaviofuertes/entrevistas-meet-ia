@@ -40,7 +40,7 @@ export class RealRecall implements RecallService {
     const webhookUrl = `${base}/webhooks/recall/captions`;
     const stageUrl = `${base}/bot-stage/${input.interviewId}`;
 
-    const body = {
+    const body: Record<string, unknown> = {
       bot_name: config.RECALL_BOT_NAME,
       meeting_url: input.meetUrl,
       // Output Media → webpage: única forma confiable de que el bot reproduzca
@@ -53,6 +53,15 @@ export class RealRecall implements RecallService {
           config: { url: stageUrl },
         },
       },
+      // Variante de hardware — web_4_core o web_gpu eliminan el cuello de CPU
+      // que causa stuttering en el rendering de la página del bot.
+      ...(config.RECALL_BOT_VARIANT !== 'web' && {
+        variant: {
+          google_meet:       config.RECALL_BOT_VARIANT,
+          zoom:              config.RECALL_BOT_VARIANT,
+          microsoft_teams:   config.RECALL_BOT_VARIANT,
+        },
+      }),
       recording_config: {
         transcript: {
           provider: { recallai_streaming: {} },
