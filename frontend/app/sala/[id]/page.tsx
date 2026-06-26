@@ -574,16 +574,63 @@ export default function SalaPage() {
       </div>
 
       {/* ── Subtitles ─────────────────────────────────────────────────────── */}
-      {showCC && subtitle && (
-        <div style={{ position: 'absolute', bottom: 84, left: 0, right: 200, display: 'flex', justifyContent: 'center', zIndex: 10, padding: '0 16px', pointerEvents: 'none' }}>
-          <div style={{ background: 'rgba(0,0,0,0.78)', backdropFilter: 'blur(10px)', borderRadius: 8, padding: '8px 20px', fontSize: 15, lineHeight: 1.55, maxWidth: 560, textAlign: 'center' }}>
-            {subtitle}
-          </div>
-        </div>
-      )}
-      {showCC && interimText && (
-        <div style={{ position: 'absolute', bottom: subtitle ? 142 : 84, inset: '0 200px 0 0', display: 'flex', justifyContent: 'center', alignItems: 'flex-end', zIndex: 10, pointerEvents: 'none', paddingBottom: 2 }}>
-          <span style={{ fontSize: 13, color: '#9aa0a6', fontStyle: 'italic' }}>{interimText}</span>
+      {showCC && (subtitle || interimText) && (
+        <div style={{
+          position: 'absolute',
+          bottom: 80,
+          left: 12,
+          right: 204, // deja espacio al PiP (180+12+12)
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 6,
+          zIndex: 11,
+          pointerEvents: 'none',
+        }}>
+          {/* leIA — lo que dijo / está diciendo */}
+          {subtitle && (
+            <div style={{
+              width: '100%',
+              maxWidth: 680,
+              background: 'rgba(0,0,0,0.82)',
+              backdropFilter: 'blur(14px)',
+              WebkitBackdropFilter: 'blur(14px)',
+              borderRadius: 10,
+              padding: '10px 16px 11px',
+              borderLeft: '3px solid #1a73e8',
+              opacity: leiaSpeaking ? 1 : 0.65,
+              transition: 'opacity 0.4s ease',
+            }}>
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1.1, color: '#1a73e8', textTransform: 'uppercase', marginBottom: 4 }}>
+                leIA
+              </div>
+              <div style={{ fontSize: 15, color: '#e8eaed', lineHeight: 1.55, fontWeight: 400 }}>
+                {subtitle}
+              </div>
+            </div>
+          )}
+
+          {/* Candidato — transcripción en tiempo real */}
+          {interimText && (
+            <div style={{
+              width: '100%',
+              maxWidth: 680,
+              background: 'rgba(0,0,0,0.78)',
+              backdropFilter: 'blur(14px)',
+              WebkitBackdropFilter: 'blur(14px)',
+              borderRadius: 10,
+              padding: '10px 16px 11px',
+              borderLeft: '3px solid #34a853',
+            }}>
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1.1, color: '#34a853', textTransform: 'uppercase', marginBottom: 4 }}>
+                {info?.candidateName ?? 'Tú'}
+              </div>
+              <div style={{ fontSize: 15, color: 'rgba(232,234,237,0.9)', lineHeight: 1.55, fontWeight: 400 }}>
+                {interimText}
+                <span style={{ display: 'inline-block', width: 2, height: 14, background: '#34a853', marginLeft: 3, borderRadius: 1, verticalAlign: 'middle', animation: 'blink 1s step-end infinite' }} />
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -620,6 +667,7 @@ export default function SalaPage() {
         @keyframes pulse  { 0%,100%{opacity:1} 50%{opacity:.25} }
         @keyframes bounce { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
         @keyframes eq     { from{height:4px} to{height:18px} }
+        @keyframes blink  { 0%,100%{opacity:1} 50%{opacity:0} }
       `}</style>
     </div>
   );
