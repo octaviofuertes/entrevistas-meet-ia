@@ -422,14 +422,22 @@ export default function SalaPage() {
     }
   }, [startRecording, stopRecording]);
 
-  // ── Cleanup ───────────────────────────────────────────────────────────────
-  useEffect(() => () => {
-    if (timerRef.current) clearInterval(timerRef.current);
-    wsRef.current?.close();
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    lobbyStream.current?.getTracks().forEach(t => t.stop());
-    audioCtxRef.current?.close().catch(() => {});
-  }, []);
+  // ── Cleanup + beforeunload beacon ────────────────────────────────────────
+  useEffect(() => {
+    const onUnload = () => {
+      // sendBeacon funciona incluso mientras la página se está cerrando
+      navigator.sendBeacon(`${API_URL}/api/sala/${id}/finalize`);
+    };
+    window.addEventListener('beforeunload', onUnload);
+    return () => {
+      window.removeEventListener('beforeunload', onUnload);
+      if (timerRef.current) clearInterval(timerRef.current);
+      wsRef.current?.close();
+      streamRef.current?.getTracks().forEach(t => t.stop());
+      lobbyStream.current?.getTracks().forEach(t => t.stop());
+      audioCtxRef.current?.close().catch(() => {});
+    };
+  }, [id]);
 
   const fmt = (s: number) =>
     `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;

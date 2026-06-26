@@ -82,23 +82,10 @@ export async function browserSalaRoute(app: FastifyInstance) {
         logger.warn({ err }, 'sala-browser: mensaje inválido');
       }
     });
-
-    // Fallback: si el WS se cierra sin hangup explícito, finalizar igual
-    socket.on('close', async () => {
-      try {
-        const db = await getDb();
-        const iv = await db.getInterview(id);
-        if (iv?.status === 'en_curso') {
-          logger.info({ interviewId: id }, 'sala-browser: WS cerrado, finalizando entrevista');
-          const engine = getEngine(db, id);
-          engine.stop('auto').catch((err) => {
-            logger.error({ err, interviewId: id }, 'sala-browser: close stop falló');
-          });
-        }
-      } catch (err) {
-        logger.warn({ err }, 'sala-browser: error en close handler');
-      }
-    });
+    // NO hay socket.on('close') aquí — mataba el engine en cualquier micro-desconexión
+    // (incluyendo el doble-mount de React en dev). La finalización se dispara por:
+    //   1. mensaje {type:'hangup'} → endCall() en el frontend
+    //   2. POST /api/sala/:id/finalize → navigator.sendBeacon en beforeunload
   });
 
   // ---- Finalizar entrevista y generar informe (sin auth — llamado desde la sala del candidato) ----
