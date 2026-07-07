@@ -13,7 +13,8 @@ services:
       POSTGRES_USER: entrevistas
       POSTGRES_PASSWORD: entrevistas
     ports:
-      - "5432:5432"
+      # Host 5433 para no colisionar con el Postgres de leia-core (5432).
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backend/src/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro

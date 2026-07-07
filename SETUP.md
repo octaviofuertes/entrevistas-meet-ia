@@ -35,7 +35,7 @@ docker compose up -d postgres
 
 # En .env (raíz y backend/.env):
 DATABASE_DRIVER=postgres
-DATABASE_URL=postgresql://entrevistas:entrevistas@localhost:5432/entrevistas
+DATABASE_URL=postgresql://entrevistas:entrevistas@localhost:5433/entrevistas
 
 # Cargar el seed (opcional)
 npm run seed --workspace=backend
