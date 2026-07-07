@@ -7,6 +7,8 @@ import type {
   FirstQuestionInput,
   Report1Input,
   Report2Input,
+  StructureJobInput,
+  StructureJobOutput,
 } from './index';
 import type { DimensionScores, Report1Payload, Report2Payload } from '../../types';
 import {
@@ -90,6 +92,44 @@ Devolvé SOLO el texto a decir, sin comillas ni metadatos.`;
     } catch (err) {
       logger.warn({ err }, 'gemini.generateClosing: fallback a mock');
       return this.fallback.generateClosing(input);
+    }
+  }
+
+  async structureJob(input: StructureJobInput): Promise<StructureJobOutput> {
+    const sys = `Sos leIA. Estructurá este puesto a partir del texto libre que cargó un reclutador.
+Devolvé JSON ESTRICTO con esta forma exacta:
+{"stack":["..."],"seniority":"junior|semi|senior|lead","yearsOfExperience":<entero>,"responsibilities":["..."],"niceToHave":["..."]}
+- "stack": tecnologías concretas mencionadas o claramente implícitas (máx 8).
+- "seniority": una de junior/semi/senior/lead según el texto.
+- "responsibilities": 3 a 5 responsabilidades concretas.
+- "niceToHave": 0 a 5 items, puede ser vacío.
+No agregues texto fuera del JSON.`;
+    try {
+      const text = await this.callGemini({
+        system: sys,
+        user: `Título: ${input.title}\nDescripción: ${input.description}\nConocimientos requeridos: ${input.knowledge}`,
+        maxTokens: 500,
+        temperature: 0.4,
+        json: true,
+      });
+      const parsed = JSON.parse(extractJSON(text));
+      const seniority = ['junior', 'semi', 'senior', 'lead'].includes(parsed.seniority)
+        ? parsed.seniority
+        : 'semi';
+      const stack = Array.isArray(parsed.stack) ? parsed.stack.map(String).slice(0, 8) : [];
+      if (stack.length === 0) throw new Error('sin stack detectado');
+      return {
+        stack,
+        seniority,
+        yearsOfExperience: Math.max(0, Math.min(40, Math.round(Number(parsed.yearsOfExperience) || 0))),
+        responsibilities: Array.isArray(parsed.responsibilities)
+          ? parsed.responsibilities.map(String).slice(0, 6)
+          : [],
+        niceToHave: Array.isArray(parsed.niceToHave) ? parsed.niceToHave.map(String).slice(0, 6) : [],
+      };
+    } catch (err) {
+      logger.warn({ err }, 'gemini.structureJob: fallback a mock');
+      return this.fallback.structureJob(input);
     }
   }
 

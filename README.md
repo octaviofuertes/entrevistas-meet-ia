@@ -1,44 +1,68 @@
-# Agente IA · Entrevistas Meet · v2.0 (leIA)
+# Agente IA · Entrevistas · v2.0 (leIA)
 
-Sistema de entrevistas automáticas en **Google Meet** según la guía técnica
-*Agente_IA_Entrevistas_Meet_leIA_v2*. Implementa el stack del documento:
+Plataforma de entrevistas laborales conducidas por **leIA**, una entrevistadora
+virtual que conversa por voz con el candidato en **dos canales**: una **sala
+web propia** (sin Meet ni proveedores externos de videollamada) o dentro de
+un **Google Meet real** (vía un bot de Recall.ai). En ambos casos leIA evalúa
+cada respuesta, decide la siguiente pregunta y genera un informe con
+puntajes, analítica y recomendación al terminar.
 
 ```
-Google Meet
-   ↓ (bot Recall.ai · captions nativos de Meet)
-Backend Node.js (WebSockets)
-   ↓
-leIA  (IA propia del sistema · evalúa · genera preguntas · arma informes)
-   ↓
-ElevenLabs TTS
-   ↓ (audio reproducido por el bot en la reunión)
-Google Meet
+Sala nativa (browser)                    Google Meet
+   ↓ WebSocket propio                       ↓ bot Recall.ai
+   |                                        | (transcripción recallai_streaming)
+   └──────────────┬─────────────────────────┘
+                   ↓
+         Backend Node.js (Fastify + WS)
+                   ↓
+   leIA (IA propia del sistema · evalúa · genera preguntas · arma informes)
+                   ↓
+              TTS (driver por entrevista)
+                   ↓
+         audio de vuelta al canal de origen
 ```
 
-Sin Deepgram. La inteligencia (evaluación, preguntas, informes) vive dentro
-del sistema como **leIA**: en modo mock funciona end-to-end con heurísticas;
-en producción podés enchufarle un motor por env (`LEIA_DRIVER`):
+La inteligencia (evaluación, preguntas, informes) vive dentro del sistema
+como **leIA**: en modo mock funciona end-to-end con heurísticas determinis­tas
+(sin costo, sin API keys); en producción se le enchufa un motor por env
+(`LEIA_DRIVER`):
 
 - `mock` (default) — heurística determinista, sin costo.
-- `gemini` — Google Generative Language. Uso **temporal** hasta tener la IA
-  propia. Modelo por defecto: `gemini-2.5-flash`.
+- `gemini` — Google Generative Language. Modelo por defecto:
+  `gemini-2.5-flash-lite`.
 - `claude` — Anthropic Claude.
 
 El contrato público (`POST /api/leia/evaluate`, `POST /api/leia/next-question`,
-informes 1 y 2) no cambia con el driver: leIA es la marca y la abstracción,
-adentro vive el motor que esté configurado.
+Informes 1 y 2) no cambia con el driver: leIA es la marca y la abstracción,
+adentro vive el motor que esté configurado. **Nota de privacidad:** con los
+drivers `gemini`/`claude` activos, la transcripción de la entrevista viaja al
+proveedor externo correspondiente para su evaluación — no es una limitación
+"temporal" a esconder, es el estado real del sistema hoy.
 
 ## Qué hay adentro
 
 - **Backend** Fastify + WebSockets + TypeScript.
-- **Frontend** Next.js 14 + Tailwind: `/puestos`, `/candidatos`, `/entrevistas`,
-  sala en vivo y los dos informes por entrevista.
+- **Frontend** Next.js 14 + Tailwind: `/puestos` (desde link o desde
+  formulario), `/candidatos`, `/entrevistas` (listado, detalle, sala nativa e
+  informe), `/sala/[id]` (la sala web propia del candidato).
 - **Persistencia** PostgreSQL (con `docker-compose`) o memoria.
 - **Drivers** intercambiables por env:
   - `LEIA_DRIVER` = `mock` (default) · `gemini` · `claude`
-  - `RECALL_DRIVER` = `mock` (default) o `recall`
-  - `TTS_DRIVER` = `mock` (default) o `elevenlabs`
+  - `RECALL_DRIVER` = `mock` (default) o `recall` (solo canal Meet)
+  - `TTS_DRIVER` = `mock` (default) · `elevenlabs` · `gemini` · `edge`
+    — además, **cada entrevista puede fijar su propia voz** (`gemini` o
+    `edge`) independiente del driver global, editable mientras está
+    `agendada` (`PATCH /api/interviews/:id/tts`).
   - `DATABASE_DRIVER` = `memory` (default) o `postgres`
+
+## Matriz de capacidades por canal
+
+| | Sala nativa (`/sala/:id`) | Google Meet (bot Recall.ai) |
+|---|---|---|
+| Requiere URL de Meet | No | Sí, se pega a mano al agendar (no se genera automáticamente) |
+| Transcripción | Web Speech del navegador del candidato | `recallai_streaming` (STT propio de Recall.ai — **no** son los captions nativos de Meet) |
+| Costo aproximado (20 min, drivers reales) | Sin Recall.ai | + Recall.ai ≈ USD 0.20 |
+| Estado | Rama activa, en integración | Estable |
 
 ## Arrancar en 3 minutos (modo demo)
 
@@ -51,25 +75,41 @@ npm run dev
 Después abrís http://localhost:3000.
 
 Por defecto todo es mock: ni API key, ni Meet real, ni costo. El motor genera
-puestos desde un link, agenda entrevistas con una URL `meet.google.com/...`
-simulada, leIA evalúa con heurísticas y los dos informes se generan
-automáticamente al cerrar la entrevista.
+puestos desde un link o desde un formulario, agenda entrevistas (sala nativa
+o con una URL de Meet real pegada a mano), leIA evalúa con heurísticas y los
+dos informes se generan automáticamente al cerrar la entrevista.
+
+> **Nota de entorno:** el comando `npm run dev` (via `tsx watch`) necesita
+> `.env` accesible desde `backend/` (los scripts de workspace corren con esa
+> carpeta como directorio de trabajo) — si solo copiaste `.env` a la raíz,
+> copialo también a `backend/.env`. Además, con `DATABASE_DRIVER=memory`
+> (el default) en Node 20+ el arranque puede fallar por una incompatibilidad
+> conocida de `tsx@3` con imports dinámicos (ver sección Troubleshooting);
+> con `DATABASE_DRIVER=postgres` no ocurre.
 
 ### Demo end-to-end
 
-1. Dashboard → **Puesto desde link** → pegá cualquier URL (LinkedIn, Indeed,
-   etc.). leIA arma el puesto con stack detectado + preferencias por defecto.
-2. **Nueva entrevista**: elegí puesto + candidato. Se asigna una URL de Meet.
-3. Abrí la sala en vivo y tocá **▶ Iniciar entrevista**.
-4. En modo demo, escribí lo que diría el candidato y enviá. leIA evalúa,
-   genera la siguiente pregunta, repite hasta cubrir las dimensiones o
-   agotar el tiempo.
-5. Al cerrar, aparecen **Informe 1** (transcripción + resumen) e **Informe 2**
-   (evaluación + scoring + recomendación).
+1. Dashboard → **Puestos → Nuevo**: pestaña "Desde link" (pegá cualquier URL,
+   leIA arma el puesto con stack detectado) o "Desde formulario" (cargás
+   título, descripción, conocimientos y metadata — leIA estructura el resto).
+2. **Nueva entrevista**: elegí puesto + candidato y el canal:
+   - **Sala nativa**: no hace falta URL; se genera un link propio para
+     compartir con el candidato. La entrevista arranca sola cuando el
+     candidato se conecta.
+   - **Google Meet**: pegá una URL real de `meet.google.com/...` y tocá
+     "Iniciar entrevista" (esto abre el Meet y conecta el bot).
+3. En modo demo (drivers mock), enviá texto simulando al candidato
+   (`POST /api/interviews/:id/simulate-answer`, o desde la UI de la sala).
+   leIA evalúa, genera la siguiente pregunta, repite hasta cubrir las
+   dimensiones o agotar el tiempo.
+4. Al cerrar (manual o automático al cortar), se genera un **informe único**
+   por entrevista: resumen narrativo + transcripción (Informe 1) combinado
+   con scoring, radar de competencias, analítica de sentimiento/calidad y
+   recomendación (Informe 2).
 
 ## Pasar a producción
 
-Setear en `.env`:
+Setear en `.env` (en `backend/.env`, ver nota de entorno arriba):
 
 ```bash
 DATABASE_DRIVER=postgres
@@ -77,47 +117,58 @@ LEIA_DRIVER=claude
 ANTHROPIC_API_KEY=sk-ant-...
 RECALL_DRIVER=recall
 RECALL_API_KEY=...
-TTS_DRIVER=elevenlabs
-ELEVENLABS_API_KEY=...
+TTS_DRIVER=edge          # o elevenlabs / gemini
+ELEVENLABS_API_KEY=...   # si TTS_DRIVER=elevenlabs
 PUBLIC_BASE_URL=https://tu-dominio.com
 ```
 
-Levantar Postgres + Redis:
+Levantar Postgres:
 
 ```bash
-docker compose up -d
+docker compose up -d postgres
 npm run seed --workspace=backend
 ```
 
 El bot de Recall.ai necesita poder llamar a tu webhook
-`POST /webhooks/recall/captions`. En producción exponé esa URL pública.
+`POST /webhooks/recall/captions` y cargar la página `GET /bot-stage/:id`
+(el "escenario" con el avatar). En producción exponé el backend en una URL
+pública (`PUBLIC_BASE_URL`).
 
 ## Endpoints REST
 
-Todos requieren `Authorization: Bearer ${ADMIN_TOKEN}` salvo `/api/health`,
-`/ws/*` y `/webhooks/*`.
+Todos requieren `Authorization: Bearer ${ADMIN_TOKEN}` **salvo**:
+`/api/health`, `/ws/*`, `/webhooks/*`, `/bot-stage*` (la página y el WS que
+carga el bot de Recall.ai) y `/api/sala/*` (la cara pública de la sala nativa
+que usa el candidato, sin login).
 
 ```
 GET    /api/health
-POST   /api/jobs/from-link        → crea Job a partir de un link
+POST   /api/jobs/from-link         → crea Job a partir de un link
+POST   /api/jobs/from-form         → crea Job a partir de un formulario (leIA estructura stack/seniority)
 GET    /api/jobs
 GET    /api/jobs/:id
 POST   /api/candidates
 GET    /api/candidates
-POST   /api/interviews            → crea entrevista con URL de Meet
-POST   /api/interviews/:id/start  → arranca el bot y leIA
+POST   /api/interviews             → crea entrevista (modo meet o browser)
+PATCH  /api/interviews/:id/tts     → cambia la voz (solo en estado "agendada")
+POST   /api/interviews/:id/start   → arranca el bot/sala y leIA
 POST   /api/interviews/:id/simulate-answer  (modo demo)
 POST   /api/interviews/:id/finalize         → genera Informes 1 y 2
 GET    /api/interviews/:id
-POST   /api/leia/evaluate         → contrato del documento
+POST   /api/leia/evaluate          → contrato directo de leIA (fuera del flujo de entrevista)
 POST   /api/leia/next-question
 GET    /api/reports/:interviewId/1
 GET    /api/reports/:interviewId/2
+GET    /api/reports/by-interview/:interviewId
+GET    /api/sala/:id/info          → info pública para la vista del candidato (sala nativa)
 ```
 
-WebSocket: `ws://host/ws/interview/:id`. Eventos del documento:
-`candidate_speaking`, `caption_received`, `leia_evaluation_ready`,
-`question_generated`, `audio_generated`, `interview_finished`, `report_ready`.
+WebSockets:
+- `ws://host/ws/interview/:id` — observador de la entrevista (transcripción,
+  evaluaciones, estado en vivo). Emite todos los eventos del ciclo pero hoy
+  ningún frontend lo consume todavía.
+- `ws://host/ws/sala/:id` — canal bidireccional de la sala nativa (candidato).
+- `ws://host/ws/bot-stage/:id` — canal de audio del bot en Google Meet.
 
 ## Estructura
 
@@ -126,36 +177,54 @@ backend/
   src/
     server.ts                 Fastify + rutas + WS
     config.ts
-    db/                       memoria + postgres + schema v2
+    db/                       memoria + postgres + schema
     services/
-      leia/                   mock + claude
-      recall/                 mock + recall.ai real
-      tts/                    mock + elevenlabs
-      jobs/fromLink.ts        link → Job
-      interview/engine.ts     Orquesta el ciclo de la entrevista
+      leia/                   mock + gemini + claude (+ structureJob)
+      recall/                 mock + recall.ai real + sala nativa (browser)
+      tts/                    mock + elevenlabs + gemini + edge
+      jobs/                   fromLink.ts (link → Job) + fromForm.ts (formulario → Job)
+      interview/engine.ts     Orquesta el ciclo de la entrevista (ambos canales)
     routes/                   jobs · candidates · interviews · leia · reports
-    realtime/                 ws de entrevista + webhook de Recall.ai
+    realtime/                 ws de entrevista + webhook de Recall.ai + bot-stage + sala nativa
 frontend/
   app/
-    puestos/                  link → puesto + listado/detalle
+    puestos/                  desde link o formulario + listado/detalle
     candidatos/
-    entrevistas/              listado + detalle + Informes 1 y 2
-    entrevista-en-vivo/[id]/  sala en vivo con captions
-docker-compose.yml            Postgres + Redis
+    entrevistas/              listado + detalle (con selector de voz) + informe único
+    sala/[id]/                sala nativa del candidato (sin Meet)
+docker-compose.yml            Postgres
 ```
 
-## Costos por entrevista (20 min)
+## Costos por entrevista (20 min, drivers reales)
 
-| Servicio       | v1 (Gemini)  | v2 (leIA)    |
-|----------------|-------------:|-------------:|
-| Recall.ai      | USD 0.20     | USD 0.20     |
-| STT            | USD 0.01     | **USD 0.00** |
-| IA evaluación  | USD 0.01     | (interno)    |
-| ElevenLabs TTS | USD 0.02     | USD 0.02     |
-| **Total ext.** | **USD 0.24** | **USD 0.22** |
+| Servicio | Sala nativa | Google Meet |
+|---|---:|---:|
+| Voz (Edge, gratis) | USD 0.00 | USD 0.00 |
+| Voz (ElevenLabs, alternativa) | ~USD 0.30–0.40 | ~USD 0.30–0.40 |
+| IA (Gemini/Claude, evaluación) | ~USD 0.01–0.10 | ~USD 0.01–0.10 |
+| Recall.ai (bot en Meet) | — | ~USD 0.20 |
 
-Más allá del ahorro: toda la IA queda dentro del sistema. No salen datos
-de candidatos a proveedores de IA externos.
+## Troubleshooting
+
+**`npm run dev` falla con `TypeError: seedDb is not a function`** →
+incompatibilidad conocida entre `tsx@3.14` y versiones recientes de Node en
+imports dinámicos (`backend/src/db/memory.ts`, `backend/src/db/seed.ts`),
+específica de `DATABASE_DRIVER=memory`. Workarounds: usar
+`DATABASE_DRIVER=postgres`, o compilar y correr con Node directo
+(`npm run build --workspace=backend && node backend/dist/server.js`).
+
+**`.env` no se aplica** → confirmá que existe también en `backend/.env`
+(no solo en la raíz); los scripts de workspace (`npm run dev --workspace=backend`)
+corren con `backend/` como directorio de trabajo, y `dotenv` busca `.env`
+relativo a ese cwd.
+
+**El bot no aparece en la reunión (canal Meet)** → revisar `RECALL_API_KEY`,
+que la URL de Meet sea pública y que `PUBLIC_BASE_URL` esté seteada a una URL
+accesible por el navegador del bot (no localhost, no ngrok-free por su
+página interstitial — usar Cloudflare Tunnel).
+
+**`unauthorized`** → todas las rutas REST salvo las listadas arriba requieren
+`Authorization: Bearer ${ADMIN_TOKEN}`.
 
 ## Licencia
 

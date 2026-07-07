@@ -5,9 +5,12 @@ import type {
   FirstQuestionInput,
   Report1Input,
   Report2Input,
+  StructureJobInput,
+  StructureJobOutput,
 } from './index';
 import type { DimensionScores, Report1Payload, Report2Payload } from '../../types';
 import { computeQualityDistribution, computeSentimentFallback } from '../interview/analytics';
+import { detectStack, detectSeniority, defaultYears } from '../jobs/fromLink';
 
 /**
  * Mock determinista de leIA. Usa heurísticas sobre el transcript:
@@ -29,6 +32,23 @@ export class MockLeia implements LeiaService {
 
   async generateClosing(input: FirstQuestionInput): Promise<string> {
     return `Listo ${input.candidateName}, terminamos por hoy. Gracias por tu tiempo, vas a recibir el feedback en los próximos días.`;
+  }
+
+  async structureJob(input: StructureJobInput): Promise<StructureJobOutput> {
+    const text = `${input.title} ${input.description} ${input.knowledge}`;
+    const stack = detectStack(text);
+    const seniority = detectSeniority(text);
+    return {
+      stack,
+      seniority,
+      yearsOfExperience: defaultYears(seniority),
+      responsibilities: [
+        'Desarrollo de features end-to-end',
+        'Code review y mentoría',
+        'Colaboración con producto y diseño',
+      ],
+      niceToHave: [],
+    };
   }
 
   async firstQuestion(input: FirstQuestionInput): Promise<string> {

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { v4 as uuid } from 'uuid';
 import { getDb } from '../db';
 import { buildJobFromLink } from '../services/jobs/fromLink';
+import { buildJobFromForm } from '../services/jobs/fromForm';
 import { ALL_DIMENSIONS } from '../types';
 
 const DimensionEnum = z.enum([
@@ -35,6 +36,29 @@ const FromLinkSchema = z.object({
       language: z.string().optional(),
     })
     .optional(),
+});
+
+const PreferencesSchema = z.object({
+  durationMinutes: z.number().int().min(5).max(120).optional(),
+  dimensionsToCover: z.array(DimensionEnum).min(1).optional(),
+  toneOfVoice: z.enum(['formal', 'cercano', 'tecnico']).optional(),
+  generateReport1: z.boolean().optional(),
+  generateReport2: z.boolean().optional(),
+});
+
+const FromFormSchema = z.object({
+  title: z.string().min(3),
+  company: z.string().optional(),
+  description: z.string().min(10),
+  knowledge: z.string().min(3),
+  location: z.string().optional(),
+  salary: z.string().optional(),
+  modality: z.enum(['presencial', 'hibrido', 'remoto']).optional(),
+  vacancies: z.number().int().min(1).max(99).optional(),
+  hiringStatus: z.enum(['abierto', 'pausado', 'cerrado']).optional(),
+  publishedAt: z.string().datetime().optional(),
+  language: z.string().optional(),
+  preferences: PreferencesSchema.optional(),
 });
 
 export async function jobsRoutes(app: FastifyInstance) {
@@ -70,6 +94,26 @@ export async function jobsRoutes(app: FastifyInstance) {
       action: 'created_from_link',
       actor: 'system',
       metadata: { link: parsed.data.link, dimensions: job.preferences.dimensionsToCover, allDimensions: ALL_DIMENSIONS.length },
+      timestamp: new Date().toISOString(),
+    });
+    return reply.code(201).send(job);
+  });
+
+  app.post('/api/jobs/from-form', async (req, reply) => {
+    const parsed = FromFormSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'invalid_input', issues: parsed.error.flatten() });
+    }
+    const db = await getDb();
+    const job = await buildJobFromForm(parsed.data);
+    await db.createJob(job);
+    await db.log({
+      id: uuid(),
+      entity: 'job',
+      entityId: job.id,
+      action: 'created_from_form',
+      actor: 'system',
+      metadata: { dimensions: job.preferences.dimensionsToCover, allDimensions: ALL_DIMENSIONS.length },
       timestamp: new Date().toISOString(),
     });
     return reply.code(201).send(job);

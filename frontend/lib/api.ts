@@ -64,6 +64,25 @@ export const apiCreateJobFromLink = (data: {
     body: JSON.stringify(data),
   });
 
+export const apiCreateJobFromForm = (data: {
+  title: string;
+  company?: string;
+  description: string;
+  knowledge: string;
+  location?: string;
+  salary?: string;
+  modality?: Job['modality'];
+  vacancies?: number;
+  hiringStatus?: Job['hiringStatus'];
+  publishedAt?: string;
+  language?: string;
+  preferences?: Partial<Job['preferences']>;
+}) =>
+  http<Job>('/api/jobs/from-form', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+
 export const apiDeleteJob = (id: string) =>
   http<void>(`/api/jobs/${id}`, { method: 'DELETE' });
 

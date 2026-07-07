@@ -41,6 +41,7 @@ export async function buildJobFromForm(input: JobFormInput): Promise<Job> {
     toneOfVoice: input.preferences?.toneOfVoice ?? 'cercano',
     generateReport1: input.preferences?.generateReport1 ?? true,
     generateReport2: input.preferences?.generateReport2 ?? true,
+    behavioralAnalysisEnabled: true,
   };
 
   const now = new Date().toISOString();

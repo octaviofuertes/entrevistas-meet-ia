@@ -701,7 +701,7 @@ const STOPWORDS = new Set([
   'contame', 'decime', 'podes', 'podrias', 'puedes', 'podria', 'podriamos', 'tenes',
 ]);
 
-function findSimilarQuestion(candidate: string, previous: string[]): string | null {
+export function findSimilarQuestion(candidate: string, previous: string[]): string | null {
   const candTokens = tokenSet(candidate);
   if (candTokens.size === 0) return null;
   for (const prev of previous) {
@@ -736,7 +736,7 @@ function truncate(s: string, max: number): string {
 // que muchas y raras.
 const BANNED_FILLER_PATTERNS = /(\bbuen[ií]simo\b|\bperfecto\b|\bexcelente\b|\bmuy bien\b|\bgenial\b|\bincre[ií]ble\b|\bfant[áa]stico\b|\bbrillante\b|\bqu[ée] bueno\b|\binteresante\b|\bpasemos\b|\bcambi(emos|amos|emos)\b|\botro tema\b|\bsiguiente pregunta\b|\bvamos con\b|\btengo una pregunta\b|\bte quer[ií]a preguntar\b|\buna consulta\b|\bahora te pregunto\b)/i;
 
-function isNeutralFiller(s: string): boolean {
+export function isNeutralFiller(s: string): boolean {
   const t = s.trim();
   if (!t) return false;
   const words = t.split(/\s+/).filter(Boolean).length;
@@ -751,7 +751,7 @@ function isNeutralFiller(s: string): boolean {
  * Separa por `.`, `!`, `?` seguidos de espacio, manteniendo el signo.
  * Si el texto es corto (<= 60 chars) lo devuelve como un único chunk.
  */
-function splitSentences(text: string): string[] {
+export function splitSentences(text: string): string[] {
   if (text.length <= 60) return [text];
   // Usamos un centinela en lugar de lookbehind para compatibilidad máxima
   const parts = text

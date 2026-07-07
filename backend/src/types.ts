@@ -20,7 +20,12 @@ export interface JobPreferences {
   toneOfVoice: 'formal' | 'cercano' | 'tecnico';
   generateReport1: boolean;
   generateReport2: boolean;
+  /** Análisis de comportamiento por cámara (Etapa 2). Default: activado. */
+  behavioralAnalysisEnabled?: boolean;
 }
+
+export type JobModality = 'presencial' | 'hibrido' | 'remoto';
+export type JobHiringStatus = 'abierto' | 'pausado' | 'cerrado';
 
 export interface Job {
   id: UUID;
@@ -31,6 +36,13 @@ export interface Job {
   requirements: JobRequirements;
   preferences: JobPreferences;
   rawText?: string | null;
+  /** Fecha de publicación de la búsqueda. */
+  publishedAt?: ISODate | null;
+  location?: string | null;
+  salary?: string | null;
+  vacancies?: number | null;
+  modality?: JobModality | null;
+  hiringStatus?: JobHiringStatus | null;
   createdAt: ISODate;
   updatedAt: ISODate;
 }

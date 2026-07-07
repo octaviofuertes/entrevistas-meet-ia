@@ -40,6 +40,21 @@ export interface FirstQuestionInput {
   candidateName: string;
 }
 
+export interface StructureJobInput {
+  title: string;
+  description: string;
+  knowledge: string;
+  language: string;
+}
+
+export interface StructureJobOutput {
+  stack: string[];
+  seniority: Job['requirements']['seniority'];
+  yearsOfExperience: number;
+  responsibilities: string[];
+  niceToHave: string[];
+}
+
 export interface Report1Input {
   job: Job;
   candidateName: string;
@@ -74,6 +89,8 @@ export interface LeiaService {
   generateFillers(input: FirstQuestionInput): Promise<string[]>;
   /** Genera el cierre de la entrevista, contextualizado al candidato y puesto. */
   generateClosing(input: FirstQuestionInput): Promise<string>;
+  /** Estructura un puesto cargado por formulario: deduce stack, seniority y responsabilidades. */
+  structureJob(input: StructureJobInput): Promise<StructureJobOutput>;
 }
 
 let instance: LeiaService | null = null;

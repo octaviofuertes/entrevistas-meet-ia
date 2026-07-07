@@ -58,6 +58,7 @@ export async function buildJobFromLink(link: string, overrides?: {
     toneOfVoice: overrides?.preferences?.toneOfVoice ?? 'cercano',
     generateReport1: overrides?.preferences?.generateReport1 ?? true,
     generateReport2: overrides?.preferences?.generateReport2 ?? true,
+    behavioralAnalysisEnabled: true,
   };
 
   const now = new Date().toISOString();
@@ -70,6 +71,12 @@ export async function buildJobFromLink(link: string, overrides?: {
     requirements,
     preferences,
     rawText: html ? html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 4000) : null,
+    publishedAt: now,
+    location: null,
+    salary: null,
+    vacancies: null,
+    modality: null,
+    hiringStatus: 'abierto',
     createdAt: now,
     updatedAt: now,
   };
@@ -141,22 +148,22 @@ const KNOWN_STACK = [
   'Jest', 'Vitest', 'Cypress', 'Playwright',
 ];
 
-function detectStack(text: string): string[] {
+export function detectStack(text: string): string[] {
   const lower = text.toLowerCase();
   const found = KNOWN_STACK.filter((s) => lower.includes(s.toLowerCase()));
   if (found.length > 0) return found.slice(0, 8);
   return ['JavaScript', 'TypeScript'];
 }
 
-function detectSeniority(text: string): JobRequirements['seniority'] {
+export function detectSeniority(text: string): JobRequirements['seniority'] {
   const lower = text.toLowerCase();
   if (/lead|principal|staff|tech\s*lead/.test(lower)) return 'lead';
-  if (/senior|sr\b/.test(lower)) return 'senior';
+  if (/senior|\bsr\b/.test(lower)) return 'senior';
   if (/semi|ssr/.test(lower)) return 'semi';
   if (/junior|jr\b|trainee|intern/.test(lower)) return 'junior';
   return 'semi';
 }
 
-function defaultYears(s: JobRequirements['seniority']): number {
+export function defaultYears(s: JobRequirements['seniority']): number {
   return s === 'junior' ? 1 : s === 'semi' ? 3 : s === 'senior' ? 5 : 8;
 }

@@ -51,7 +51,11 @@ export interface JobPreferences {
   toneOfVoice: 'formal' | 'cercano' | 'tecnico';
   generateReport1: boolean;
   generateReport2: boolean;
+  behavioralAnalysisEnabled?: boolean;
 }
+
+export type JobModality = 'presencial' | 'hibrido' | 'remoto';
+export type JobHiringStatus = 'abierto' | 'pausado' | 'cerrado';
 
 export interface Job {
   id: UUID;
@@ -62,6 +66,12 @@ export interface Job {
   requirements: JobRequirements;
   preferences: JobPreferences;
   rawText?: string | null;
+  publishedAt?: string | null;
+  location?: string | null;
+  salary?: string | null;
+  vacancies?: number | null;
+  modality?: JobModality | null;
+  hiringStatus?: JobHiringStatus | null;
   createdAt: string;
   updatedAt: string;
 }
