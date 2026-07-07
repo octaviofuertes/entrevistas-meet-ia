@@ -100,6 +100,7 @@ export type InterviewStatus =
   | 'error';
 
 export type InterviewMode = 'meet' | 'browser';
+export type VoiceMode = 'live' | 'pipeline';
 
 export interface Interview {
   id: UUID;
@@ -115,6 +116,11 @@ export interface Interview {
   endedAt?: ISODate | null;
   durationSec?: number | null;
   behavioralAnalysis?: BehavioralAnalysis | null;
+  consentRecording?: boolean;
+  consentAnalysis?: boolean;
+  voiceMode?: VoiceMode | null;
+  /** Texto plano extraído del CV subido por el candidato (opcional). */
+  cvText?: string | null;
   createdAt: ISODate;
   updatedAt: ISODate;
 }

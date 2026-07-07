@@ -20,6 +20,8 @@ export interface EvaluateInput {
   lastAnswer: string;
   turnIndex: number;
   elapsedSec: number;
+  /** Texto plano del CV del candidato, si subió uno (Etapa 1). */
+  cvText?: string | null;
 }
 
 export interface EvaluateOutput {
@@ -38,6 +40,8 @@ export interface EvaluateOutput {
 export interface FirstQuestionInput {
   job: Job;
   candidateName: string;
+  /** Texto plano del CV del candidato, si subió uno (Etapa 1). */
+  cvText?: string | null;
 }
 
 export interface StructureJobInput {

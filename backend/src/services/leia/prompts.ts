@@ -52,6 +52,7 @@ export function buildEvaluatePrompt(input: {
   lastQuestion: string;
   lastAnswer: string;
   turnIndex: number;
+  cvText?: string | null;
 }): string {
   const reqs = input.job.requirements;
   const prefs = input.job.preferences;
@@ -73,13 +74,17 @@ export function buildEvaluatePrompt(input: {
     ? input.history.map((t, i) => `- (T${i + 1}) ${truncate(t.question, 160)}`).join('\n')
     : '(ninguna)';
 
+  const cvSection = input.cvText
+    ? `\nCV DEL CANDIDATO (texto extraído, puede tener errores de formato):\n${truncate(input.cvText, 3000)}\n`
+    : '';
+
   return `PUESTO: ${input.job.title} en ${input.job.company} · ${reqs.seniority} · ${reqs.yearsOfExperience}+ años
 STACK PERMITIDO PARA PREGUNTAS TÉCNICAS: ${reqs.stack.join(', ')}
 RESPONSABILIDADES: ${reqs.responsibilities.slice(0, 4).join(' · ')}
 DIMENSIONES OBJETIVO: ${prefs.dimensionsToCover.join(', ')} · DURACIÓN: ${prefs.durationMinutes} min · TONO: ${prefs.toneOfVoice}
 
 CANDIDATO: ${input.candidateName}
-
+${cvSection}
 PREGUNTAS YA HECHAS (NO REPETIR NI PARAFRASEAR NINGUNA):
 ${allQuestionsText}
 

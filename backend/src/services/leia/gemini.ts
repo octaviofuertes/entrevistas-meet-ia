@@ -143,10 +143,11 @@ Reglas para la apertura:
 - Hablás como persona real, no como un guion corporativo. Variá las palabras, no uses "perfecto", "excelente", "espero que estés bien".
 - Máximo 3-4 oraciones en total. Natural.
 Devolvé SOLO el texto a decir, sin comillas ni metadatos.`;
+    const cvSection = input.cvText ? `\nCV del candidato (texto extraído):\n${input.cvText.slice(0, 3000)}` : '';
     try {
       const text = await this.callGemini({
         system: sys,
-        user: `Candidato: ${input.candidateName}`,
+        user: `Candidato: ${input.candidateName}${cvSection}`,
         maxTokens: 220,
         temperature: 0.7,
       });
@@ -168,6 +169,7 @@ Devolvé SOLO el texto a decir, sin comillas ni metadatos.`;
           lastQuestion: input.lastQuestion,
           lastAnswer: input.lastAnswer,
           turnIndex: input.turnIndex,
+          cvText: input.cvText,
         }),
         maxTokens: 700,
         temperature: 0.6,

@@ -92,7 +92,7 @@ function parseRateFromMime(mime: string): number | undefined {
  * Sin compresión, sin pérdida — el <audio> nativo del Chrome del bot lo
  * reproduce limpio sin glitches de decodificación.
  */
-function pcmToWav(pcm: Buffer, sampleRate: number, channels = 1, bitsPerSample = 16): Buffer {
+export function pcmToWav(pcm: Buffer, sampleRate: number, channels = 1, bitsPerSample = 16): Buffer {
   const byteRate = (sampleRate * channels * bitsPerSample) / 8;
   const blockAlign = (channels * bitsPerSample) / 8;
   const header = Buffer.alloc(44);

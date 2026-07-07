@@ -60,7 +60,8 @@ export class MockLeia implements LeiaService {
         : tone === 'tecnico'
           ? 'Bienvenido'
           : 'Hola';
-    return `${opener} ${input.candidateName}, soy leIA, la entrevistadora virtual para el puesto de ${input.job.title} en ${input.job.company}. Vamos a tener una conversación de unos ${input.job.preferences.durationMinutes} minutos. Para empezar, contame brevemente sobre tu experiencia y qué te motivó a postularte a este puesto.`;
+    const cvAck = input.cvText ? ' Ya vi tu CV, así que voy a hacerte alguna pregunta más puntual.' : '';
+    return `${opener} ${input.candidateName}, soy leIA, la entrevistadora virtual para el puesto de ${input.job.title} en ${input.job.company}. Vamos a tener una conversación de unos ${input.job.preferences.durationMinutes} minutos.${cvAck} Para empezar, contame brevemente sobre tu experiencia y qué te motivó a postularte a este puesto.`;
   }
 
   async evaluate(input: EvaluateInput): Promise<EvaluateOutput> {

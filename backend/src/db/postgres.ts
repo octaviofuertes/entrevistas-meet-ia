@@ -173,8 +173,8 @@ export class PostgresDb implements Database {
 
   async createInterview(i: Interview) {
     await this.pool.query(
-      `INSERT INTO interviews (id, job_id, candidate_id, status, meet_url, tts_driver, mode, recall_bot_id, scheduled_at, started_at, ended_at, duration_sec, behavioral_analysis, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+      `INSERT INTO interviews (id, job_id, candidate_id, status, meet_url, tts_driver, mode, recall_bot_id, scheduled_at, started_at, ended_at, duration_sec, behavioral_analysis, consent_recording, consent_analysis, voice_mode, cv_text, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
       [
         i.id,
         i.jobId,
@@ -189,6 +189,10 @@ export class PostgresDb implements Database {
         i.endedAt ?? null,
         i.durationSec ?? null,
         i.behavioralAnalysis ? JSON.stringify(i.behavioralAnalysis) : null,
+        i.consentRecording ?? false,
+        i.consentAnalysis ?? false,
+        i.voiceMode ?? 'pipeline',
+        i.cvText ?? null,
         i.createdAt,
         i.updatedAt,
       ]
@@ -201,7 +205,7 @@ export class PostgresDb implements Database {
     if (!existing) return null;
     const merged: Interview = { ...existing, ...patch, updatedAt: new Date().toISOString() };
     await this.pool.query(
-      `UPDATE interviews SET job_id=$2, candidate_id=$3, status=$4, meet_url=$5, tts_driver=$6, mode=$7, recall_bot_id=$8, scheduled_at=$9, started_at=$10, ended_at=$11, duration_sec=$12, behavioral_analysis=$13, updated_at=$14 WHERE id=$1`,
+      `UPDATE interviews SET job_id=$2, candidate_id=$3, status=$4, meet_url=$5, tts_driver=$6, mode=$7, recall_bot_id=$8, scheduled_at=$9, started_at=$10, ended_at=$11, duration_sec=$12, behavioral_analysis=$13, consent_recording=$14, consent_analysis=$15, voice_mode=$16, cv_text=$17, updated_at=$18 WHERE id=$1`,
       [
         merged.id,
         merged.jobId,
@@ -216,6 +220,10 @@ export class PostgresDb implements Database {
         merged.endedAt ?? null,
         merged.durationSec ?? null,
         merged.behavioralAnalysis ? JSON.stringify(merged.behavioralAnalysis) : null,
+        merged.consentRecording ?? false,
+        merged.consentAnalysis ?? false,
+        merged.voiceMode ?? 'pipeline',
+        merged.cvText ?? null,
         merged.updatedAt,
       ]
     );
@@ -409,6 +417,10 @@ function rowToInterview(r: any): Interview {
     endedAt: r.ended_at?.toISOString() ?? null,
     durationSec: r.duration_sec,
     behavioralAnalysis: r.behavioral_analysis ?? null,
+    consentRecording: r.consent_recording ?? false,
+    consentAnalysis: r.consent_analysis ?? false,
+    voiceMode: r.voice_mode ?? 'pipeline',
+    cvText: r.cv_text ?? null,
     createdAt: r.created_at.toISOString(),
     updatedAt: r.updated_at.toISOString(),
   };

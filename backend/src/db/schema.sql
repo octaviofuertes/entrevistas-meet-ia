@@ -118,6 +118,26 @@ BEGIN
     END IF;
 END $$;
 
+ALTER TABLE interviews ADD COLUMN IF NOT EXISTS consent_recording BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE interviews ADD COLUMN IF NOT EXISTS consent_analysis  BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE interviews ADD COLUMN IF NOT EXISTS voice_mode TEXT NOT NULL DEFAULT 'pipeline';
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'chk_interviews_voice_mode'
+    ) THEN
+        ALTER TABLE interviews
+            ADD CONSTRAINT chk_interviews_voice_mode
+            CHECK (voice_mode IN ('live','pipeline'));
+    END IF;
+END $$;
+
+ALTER TABLE interviews ADD COLUMN IF NOT EXISTS cv_text TEXT;
+
 -- ----------------------------------------------------------------
 -- Interview turns (par pregunta/respuesta)
 -- ----------------------------------------------------------------

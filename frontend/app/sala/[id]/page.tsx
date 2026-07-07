@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { useVoice } from '@/lib/useVoice';
+import { apiUploadCv } from '@/lib/api';
 
 const WS_URL  = process.env.NEXT_PUBLIC_WS_URL  ?? 'ws://localhost:4000';
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
@@ -13,6 +14,7 @@ interface SalaInfo {
   jobTitle:     string;
   company:      string;
   candidateName: string;
+  voiceMode?:   string;
 }
 
 type Phase = 'loading' | 'lobby' | 'running' | 'finished' | 'error';
@@ -56,6 +58,9 @@ export default function SalaPage() {
   const [showCC,        setShowCC]        = useState(true);
   const [micOn,         setMicOn]         = useState(true);
   const [cameraOn,      setCameraOn]      = useState(true);
+  const [consentRecording, setConsentRecording] = useState(false);
+  const [consentAnalysis,  setConsentAnalysis]  = useState(false);
+  const [cvStatus, setCvStatus] = useState<'idle' | 'uploading' | 'ok' | 'error' | 'empty'>('idle');
   const [elapsed,       setElapsed]       = useState(0);
   const [recording,     setRecording]     = useState(false);
   const [reportsReady,  setReportsReady]  = useState<number[]>([]); // kinds recibidos
@@ -64,9 +69,15 @@ export default function SalaPage() {
   const micOnRef    = useRef(micOn);
   const phaseRef    = useRef(phase);
   const cameraOnRef = useRef(cameraOn);
+  const consentRecordingRef = useRef(consentRecording);
+  const consentAnalysisRef  = useRef(consentAnalysis);
+  const infoRef = useRef(info);
   useEffect(() => { micOnRef.current    = micOn;    }, [micOn]);
   useEffect(() => { phaseRef.current    = phase;    }, [phase]);
   useEffect(() => { cameraOnRef.current = cameraOn; }, [cameraOn]);
+  useEffect(() => { infoRef.current     = info;     }, [info]);
+  useEffect(() => { consentRecordingRef.current = consentRecording; }, [consentRecording]);
+  useEffect(() => { consentAnalysisRef.current  = consentAnalysis;  }, [consentAnalysis]);
 
   // Recording — composite canvas (leIA + PiP) + audio mix
   const recorderRef      = useRef<MediaRecorder | null>(null);
@@ -88,6 +99,11 @@ export default function SalaPage() {
   // Audio queue
   const audioQueueRef = useRef<Array<{ mimeType: string; audioBase64: string }>>([]);
   const playingRef    = useRef(false);
+  const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
+
+  // Captura de audio crudo del candidato (solo voiceMode 'live', para barge-in)
+  const micCtxRef       = useRef<AudioContext | null>(null);
+  const micProcessorRef = useRef<ScriptProcessorNode | null>(null);
 
   // ── Sync stream to active video element ───────────────────────────────────
   useEffect(() => {
@@ -148,6 +164,7 @@ export default function SalaPage() {
     if (!queue.length || !ctx) {
       playingRef.current    = false;
       leiaSpeakingRef.current = false;
+      currentSourceRef.current = null;
       setLeiaSpeaking(false);
       if (idleRef.current) { idleRef.current.style.display = 'block'; idleRef.current.play().catch(() => {}); }
       if (talkRef.current) { talkRef.current.style.display = 'none';  talkRef.current.pause(); }
@@ -183,6 +200,7 @@ export default function SalaPage() {
         source.buffer = buffer;
         // Rutar por masterGain → speaker + (si graba) destino de grabación
         source.connect(masterGainRef.current ?? ctx.destination);
+        currentSourceRef.current = source;
         source.onended = () => setTimeout(playNext, 40);
         source.start(0);
       },
@@ -198,6 +216,45 @@ export default function SalaPage() {
 
   const enqueueRef = useRef(enqueueAudio);
   useEffect(() => { enqueueRef.current = enqueueAudio; }, [enqueueAudio]);
+
+  // ── Captura de audio crudo del candidato (solo voiceMode 'live') ──────────
+  // PCM 16-bit LE 16kHz mono, pausado a tiempo real por el propio ritmo de
+  // captura del micrófono — nunca en ráfaga (requisito confirmado en el spike).
+  const startCandidateAudioCapture = useCallback((stream: MediaStream) => {
+    const AC = window.AudioContext ?? (window as any).webkitAudioContext;
+    const micCtx = new AC({ sampleRate: 16000 }) as AudioContext;
+    micCtxRef.current = micCtx;
+    const source = micCtx.createMediaStreamSource(stream);
+    const processor = micCtx.createScriptProcessor(4096, 1, 1);
+    const silentGain = micCtx.createGain();
+    silentGain.gain.value = 0; // no reproducir el propio mic por el speaker
+    processor.onaudioprocess = (e) => {
+      if (!micOnRef.current) return;
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      const input = e.inputBuffer.getChannelData(0);
+      const pcm16 = new Int16Array(input.length);
+      for (let i = 0; i < input.length; i++) {
+        const s = Math.max(-1, Math.min(1, input[i]));
+        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      }
+      const bytes = new Uint8Array(pcm16.buffer);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      ws.send(JSON.stringify({ type: 'candidate_audio', pcmBase64: btoa(binary) }));
+    };
+    source.connect(processor);
+    processor.connect(silentGain);
+    silentGain.connect(micCtx.destination);
+    micProcessorRef.current = processor;
+  }, []);
+
+  const stopCandidateAudioCapture = useCallback(() => {
+    micProcessorRef.current?.disconnect();
+    micProcessorRef.current = null;
+    micCtxRef.current?.close().catch(() => {});
+    micCtxRef.current = null;
+  }, []);
 
   // ── Join call ─────────────────────────────────────────────────────────────
   const joinCall = useCallback(async () => {
@@ -225,6 +282,7 @@ export default function SalaPage() {
       stream.getVideoTracks().forEach(t => (t.enabled = cameraOnRef.current));
       stream.getAudioTracks().forEach(t => (t.enabled  = micOnRef.current));
       setCurrentStream(stream);
+      if (infoRef.current?.voiceMode === 'live') startCandidateAudioCapture(stream);
     } catch { /* camera/mic optional */ }
 
     // Preload talk video
@@ -236,13 +294,20 @@ export default function SalaPage() {
     // WebSocket
     const ws = new WebSocket(`${WS_URL}/ws/sala/${id}`);
     wsRef.current = ws;
-    ws.onopen = () => { ws.send(JSON.stringify({ type: 'ready' })); setLeiaThinking(true); };
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: 'ready', consentRecording: consentRecordingRef.current, consentAnalysis: consentAnalysisRef.current }));
+      setLeiaThinking(true);
+    };
     ws.onmessage = ev => {
       try {
         const msg = JSON.parse(ev.data as string);
         if (msg.type === 'audio')    enqueueRef.current(msg.mimeType, msg.audioBase64);
         if (msg.type === 'question') setSubtitle(msg.text ?? '');
         if (msg.type === 'status' && msg.status === 'en_curso') setLeiaThinking(true);
+        if (msg.type === 'stop_audio') {
+          audioQueueRef.current = [];
+          try { currentSourceRef.current?.stop(); } catch { /* noop */ }
+        }
         if (msg.type === 'finished') endCall();
         if (msg.type === 'report_ready') {
           setReportsReady(prev => prev.includes(msg.kind) ? prev : [...prev, msg.kind as number]);
@@ -381,6 +446,7 @@ export default function SalaPage() {
 
     if (recorderRef.current) await stopRecording(true);
     audioCtxRef.current?.close().catch(() => {});
+    stopCandidateAudioCapture();
     streamRef.current?.getTracks().forEach(t => t.stop());
 
     // Notificar al backend que el candidato colgó (dispara stop + generateReports).
@@ -390,7 +456,7 @@ export default function SalaPage() {
       ws.send(JSON.stringify({ type: 'hangup' }));
       setTimeout(() => { ws.readyState === WebSocket.OPEN && ws.close(); }, 90_000);
     }
-  }, [stopRecording]);
+  }, [stopRecording, stopCandidateAudioCapture]);
 
   // ── Mic toggle ────────────────────────────────────────────────────────────
   const toggleMic = useCallback(() => {
@@ -473,7 +539,45 @@ export default function SalaPage() {
           </div>
         </div>
 
-        <button onClick={joinCall} style={{ background: '#1a73e8', color: '#fff', border: 'none', borderRadius: 24, padding: '12px 40px', fontSize: 15, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit', letterSpacing: 0.15 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 340 }}>
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 13, color: '#e8eaed', cursor: 'pointer' }}>
+            <input type="checkbox" checked={consentRecording} onChange={e => setConsentRecording(e.target.checked)}
+              style={{ marginTop: 2 }} />
+            Acepto que esta entrevista sea grabada.
+          </label>
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 13, color: '#e8eaed', cursor: 'pointer' }}>
+            <input type="checkbox" checked={consentAnalysis} onChange={e => setConsentAnalysis(e.target.checked)}
+              style={{ marginTop: 2 }} />
+            Acepto que se analicen señales de atención por cámara durante la entrevista.
+          </label>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+          <label style={{ fontSize: 13, color: '#8ab4f8', cursor: 'pointer' }}>
+            {cvStatus === 'uploading' ? 'Subiendo CV…' : 'Subí tu CV (PDF, opcional)'}
+            <input type="file" accept="application/pdf" style={{ display: 'none' }}
+              onChange={async e => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                setCvStatus('uploading');
+                try {
+                  const r = await apiUploadCv(id, file);
+                  setCvStatus(r.extracted ? 'ok' : 'empty');
+                } catch {
+                  setCvStatus('error');
+                }
+              }} />
+          </label>
+          {cvStatus === 'ok' && <p style={{ color: '#81c995', fontSize: 12, margin: 0 }}>CV cargado ✓</p>}
+          {cvStatus === 'empty' && <p style={{ color: '#9aa0a6', fontSize: 12, margin: 0 }}>No pudimos leer el texto del PDF, pero podés continuar igual.</p>}
+          {cvStatus === 'error' && <p style={{ color: '#f28b82', fontSize: 12, margin: 0 }}>No se pudo subir el CV, pero podés continuar igual.</p>}
+        </div>
+
+        <button onClick={joinCall} disabled={!consentRecording} style={{
+          background: '#1a73e8', color: '#fff', border: 'none', borderRadius: 24, padding: '12px 40px',
+          fontSize: 15, fontWeight: 500, fontFamily: 'inherit', letterSpacing: 0.15,
+          cursor: consentRecording ? 'pointer' : 'not-allowed', opacity: consentRecording ? 1 : 0.5,
+        }}>
           Unirse ahora
         </button>
         <p style={{ color: '#5f6368', fontSize: 12, textAlign: 'center', maxWidth: 300, margin: 0 }}>

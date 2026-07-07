@@ -96,6 +96,7 @@ export type InterviewStatus =
   | 'error';
 
 export type InterviewMode = 'meet' | 'browser';
+export type VoiceMode = 'live' | 'pipeline';
 
 export interface Interview {
   id: UUID;
@@ -110,6 +111,10 @@ export interface Interview {
   startedAt?: string | null;
   endedAt?: string | null;
   durationSec?: number | null;
+  consentRecording?: boolean;
+  consentAnalysis?: boolean;
+  voiceMode?: VoiceMode | null;
+  cvText?: string | null;
   createdAt: string;
   updatedAt: string;
 }

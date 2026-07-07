@@ -121,10 +121,11 @@ Reglas:
 - Hablás natural, no acartonada. Variá las aperturas. No uses "espero que estés bien".
 - 3-4 oraciones máximo.
 Devolvé SOLO el texto a decir.`;
+    const cvSection = input.cvText ? `\nCV del candidato (texto extraído):\n${input.cvText.slice(0, 3000)}` : '';
     try {
       const text = await this.callClaude({
         system: sys,
-        user: `Candidato: ${input.candidateName}`,
+        user: `Candidato: ${input.candidateName}${cvSection}`,
         maxTokens: 220,
         temperature: 0.7,
       });
@@ -146,6 +147,7 @@ Devolvé SOLO el texto a decir.`;
           lastQuestion: input.lastQuestion,
           lastAnswer: input.lastAnswer,
           turnIndex: input.turnIndex,
+          cvText: input.cvText,
         }),
         maxTokens: 450,
         temperature: 0.6,
