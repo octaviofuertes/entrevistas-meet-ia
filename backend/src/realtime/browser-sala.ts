@@ -19,9 +19,15 @@ const CV_MAX_BYTES = 5 * 1024 * 1024;
  * POST /api/sala/:id/cv             → subir CV en PDF (opcional)
  */
 export async function browserSalaRoute(app: FastifyInstance) {
-  // Parser acotado a este módulo (encapsulación de plugin de Fastify): el CV
+  // Parsers acotados a este módulo (encapsulación de plugin de Fastify): el CV
   // llega como PDF crudo en el body, no como JSON.
   app.addContentTypeParser('application/pdf', { parseAs: 'buffer' }, (_req, body, done) => {
+    done(null, body);
+  });
+
+  // La grabación llega como video crudo (webm/mp4, con parámetros de codecs
+  // según el navegador, ej. "video/webm;codecs=vp9,opus").
+  app.addContentTypeParser(/^video\//, { parseAs: 'buffer' }, (_req, body, done) => {
     done(null, body);
   });
 
@@ -163,10 +169,12 @@ export async function browserSalaRoute(app: FastifyInstance) {
   // ---- Subir grabación (WebM/MP4 desde MediaRecorder) ----
   app.post(
     '/api/sala/:id/recording',
-    { config: { skipAuth: true } },
+    { config: { skipAuth: true }, bodyLimit: 500 * 1024 * 1024 },
     async (req, reply) => {
       const { id } = req.params as { id: string };
-      // Por ahora solo logueamos y ack — en producción guardar en disco/S3
+      // Por ahora solo logueamos y ack — en producción guardar en disco/S3.
+      // Al implementar persistencia, migrar a streaming (sin parseAs buffer):
+      // 500MB en memoria por request no escala.
       const body = req.body as Buffer | undefined;
       const bytes = body?.length ?? 0;
       logger.info({ interviewId: id, bytes }, 'sala-browser: grabación recibida');

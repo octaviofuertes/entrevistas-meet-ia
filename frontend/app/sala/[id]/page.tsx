@@ -430,9 +430,12 @@ export default function SalaPage() {
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 8000);
 
+    // blob.type puede traer codecs con coma sin comillas ("video/webm;codecs=vp9,opus"),
+    // que es inválido según RFC 7231 y el backend lo rechaza con 415 — mandamos solo
+    // el media type pelado.
     fetch(`${API_URL}/api/sala/${id}/recording`, {
-      method: 'POST', headers: { 'Content-Type': blob.type }, body: blob,
-    }).catch(() => {});
+      method: 'POST', headers: { 'Content-Type': blob.type.split(';')[0] || 'video/webm' }, body: blob,
+    }).catch((err) => console.warn('sala: no se pudo subir la grabación', err));
   }, [id]);
 
   // ── End call ──────────────────────────────────────────────────────────────
