@@ -169,6 +169,7 @@ export class InterviewEngine {
             this.liveInputBuf += text;
           },
           onInterrupted: () => {
+            logger.info({ interviewId: this.interviewId }, 'voice-session: barge-in — audio interrumpido por el candidato');
             browserSalaBus.send(this.interviewId, { type: 'stop_audio' });
           },
           onTurnComplete: () => {
