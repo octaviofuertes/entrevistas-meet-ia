@@ -30,6 +30,31 @@ function getSupportedMimeType(): string {
   return types.find(t => MediaRecorder.isTypeSupported(t)) ?? '';
 }
 
+/** Resamplea PCM float32 de fromSampleRate a 16kHz (interpolación lineal) y lo clampea a Int16. */
+function resampleTo16kPCM(input: Float32Array, fromSampleRate: number): Int16Array {
+  if (fromSampleRate === 16000) {
+    const out = new Int16Array(input.length);
+    for (let i = 0; i < input.length; i++) {
+      const s = Math.max(-1, Math.min(1, input[i]));
+      out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    }
+    return out;
+  }
+  const ratio = fromSampleRate / 16000;
+  const outLength = Math.floor(input.length / ratio);
+  const out = new Int16Array(outLength);
+  for (let i = 0; i < outLength; i++) {
+    const srcIndex = i * ratio;
+    const i0 = Math.floor(srcIndex);
+    const i1 = Math.min(i0 + 1, input.length - 1);
+    const frac = srcIndex - i0;
+    const sample = input[i0] * (1 - frac) + input[i1] * frac;
+    const s = Math.max(-1, Math.min(1, sample));
+    out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  return out;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 export default function SalaPage() {
   const { id } = useParams<{ id: string }>();
@@ -96,13 +121,17 @@ export default function SalaPage() {
   const masterGainRef   = useRef<GainNode | null>(null);
   const leiaAudioDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
 
-  // Audio queue
-  const audioQueueRef = useRef<Array<{ mimeType: string; audioBase64: string }>>([]);
-  const playingRef    = useRef(false);
-  const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  // Reproducción gapless: los chunks se decodifican en orden estricto de
+  // llegada y se agendan pegados sobre el timeline del AudioContext. Live
+  // streamea muchos chunks chicos; reproducirlos de a uno con timeouts entre
+  // medio genera huecos audibles (tartamudeo).
+  const decodeChainRef   = useRef<Promise<void>>(Promise.resolve());
+  const nextStartTimeRef = useRef(0);
+  const activeSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+  const playbackGenRef   = useRef(0); // stop_audio lo incrementa: invalida chunks viejos aún en decode
 
   // Captura de audio crudo del candidato (solo voiceMode 'live', para barge-in)
-  const micCtxRef       = useRef<AudioContext | null>(null);
+  const micSourceRef    = useRef<MediaStreamAudioSourceNode | null>(null);
   const micProcessorRef = useRef<ScriptProcessorNode | null>(null);
 
   // ── Sync stream to active video element ───────────────────────────────────
@@ -156,88 +185,95 @@ export default function SalaPage() {
     return () => { alive = false; };
   }, [phase]);
 
-  // ── Audio playback via AudioContext ───────────────────────────────────────
-  const playNext = useCallback(() => {
-    const queue = audioQueueRef.current;
-    const ctx   = audioCtxRef.current;
-
-    if (!queue.length || !ctx) {
-      playingRef.current    = false;
-      leiaSpeakingRef.current = false;
-      currentSourceRef.current = null;
-      setLeiaSpeaking(false);
-      if (idleRef.current) { idleRef.current.style.display = 'block'; idleRef.current.play().catch(() => {}); }
-      if (talkRef.current) { talkRef.current.style.display = 'none';  talkRef.current.pause(); }
-      if (micOnRef.current) startListeningRef.current();
-      return;
-    }
-
-    const item = queue.shift()!;
-    playingRef.current      = true;
+  // ── Audio playback via AudioContext (scheduler gapless) ──────────────────
+  const enterSpeakingUI = useCallback(() => {
     leiaSpeakingRef.current = true;
     setLeiaSpeaking(true);
     setLeiaThinking(false);
     stopListeningRef.current();
-
     if (idleRef.current) { idleRef.current.style.display = 'none';  idleRef.current.pause(); }
     if (talkRef.current) { talkRef.current.style.display = 'block'; talkRef.current.currentTime = 0; talkRef.current.play().catch(() => {}); }
-
-    let arrayBuffer: ArrayBuffer;
-    try {
-      const bytes = atob(item.audioBase64);
-      const arr = new Uint8Array(bytes.length);
-      for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
-      arrayBuffer = arr.buffer;
-    } catch {
-      setTimeout(playNext, 20);
-      return;
-    }
-
-    ctx.decodeAudioData(
-      arrayBuffer,
-      (buffer) => {
-        const source = ctx.createBufferSource();
-        source.buffer = buffer;
-        // Rutar por masterGain → speaker + (si graba) destino de grabación
-        source.connect(masterGainRef.current ?? ctx.destination);
-        currentSourceRef.current = source;
-        source.onended = () => setTimeout(playNext, 40);
-        source.start(0);
-      },
-      () => setTimeout(playNext, 20),
-    );
   }, []);
 
-  const enqueueAudio = useCallback((mimeType: string, audioBase64: string) => {
-    audioQueueRef.current.push({ mimeType, audioBase64 });
+  const drainPlayback = useCallback(() => {
+    leiaSpeakingRef.current = false;
+    setLeiaSpeaking(false);
+    nextStartTimeRef.current = 0;
+    if (idleRef.current) { idleRef.current.style.display = 'block'; idleRef.current.play().catch(() => {}); }
+    if (talkRef.current) { talkRef.current.style.display = 'none';  talkRef.current.pause(); }
+    if (micOnRef.current) startListeningRef.current();
+  }, []);
+
+  /** Corta toda la reproducción en vuelo (barge-in / fin de llamada). */
+  const stopPlayback = useCallback(() => {
+    playbackGenRef.current++; // los chunks que sigan en decode ya no se agendan
+    for (const s of activeSourcesRef.current) { try { s.stop(); } catch { /* noop */ } }
+    activeSourcesRef.current.clear();
+    nextStartTimeRef.current = 0;
+  }, []);
+
+  const enqueueAudio = useCallback((_mimeType: string, audioBase64: string) => {
     setLeiaThinking(false);
-    if (!playingRef.current) playNext();
-  }, [playNext]);
+    const gen = playbackGenRef.current;
+    decodeChainRef.current = decodeChainRef.current.then(async () => {
+      const ctx = audioCtxRef.current;
+      if (!ctx || gen !== playbackGenRef.current) return;
+      let buffer: AudioBuffer;
+      try {
+        const bytes = atob(audioBase64);
+        const arr = new Uint8Array(bytes.length);
+        for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+        buffer = await ctx.decodeAudioData(arr.buffer);
+      } catch {
+        return; // chunk indecodificable: se saltea sin romper la cadena
+      }
+      if (gen !== playbackGenRef.current) return; // hubo stop_audio mientras decodificaba
+
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      // Rutar por masterGain → speaker + (si graba) destino de grabación
+      source.connect(masterGainRef.current ?? ctx.destination);
+
+      const startAt = Math.max(ctx.currentTime + 0.02, nextStartTimeRef.current);
+      nextStartTimeRef.current = startAt + buffer.duration;
+
+      if (activeSourcesRef.current.size === 0) enterSpeakingUI();
+      activeSourcesRef.current.add(source);
+      source.onended = () => {
+        activeSourcesRef.current.delete(source);
+        if (activeSourcesRef.current.size === 0) drainPlayback();
+      };
+      source.start(startAt);
+    });
+  }, [enterSpeakingUI, drainPlayback]);
 
   const enqueueRef = useRef(enqueueAudio);
   useEffect(() => { enqueueRef.current = enqueueAudio; }, [enqueueAudio]);
+  const stopPlaybackRef = useRef(stopPlayback);
+  useEffect(() => { stopPlaybackRef.current = stopPlayback; }, [stopPlayback]);
 
   // ── Captura de audio crudo del candidato (solo voiceMode 'live') ──────────
-  // PCM 16-bit LE 16kHz mono, pausado a tiempo real por el propio ritmo de
-  // captura del micrófono — nunca en ráfaga (requisito confirmado en el spike).
+  // Comparte el mismo AudioContext que reproduce a leIA (audioCtxRef): tener
+  // contextos separados con tasas distintas le rompe al navegador la
+  // correlación de eco que necesita echoCancellation para cancelar la propia
+  // voz de leIA captada por el micrófono. Se resamplea a 16kHz en JS (PCM
+  // 16-bit LE mono), pausado a tiempo real por el propio ritmo de captura del
+  // micrófono — nunca en ráfaga (requisito confirmado en el spike).
   const startCandidateAudioCapture = useCallback((stream: MediaStream) => {
-    const AC = window.AudioContext ?? (window as any).webkitAudioContext;
-    const micCtx = new AC({ sampleRate: 16000 }) as AudioContext;
-    micCtxRef.current = micCtx;
-    const source = micCtx.createMediaStreamSource(stream);
-    const processor = micCtx.createScriptProcessor(4096, 1, 1);
-    const silentGain = micCtx.createGain();
+    const ctx = audioCtxRef.current;
+    if (!ctx) return;
+    const fromSampleRate = ctx.sampleRate;
+    const source = ctx.createMediaStreamSource(stream);
+    micSourceRef.current = source;
+    const processor = ctx.createScriptProcessor(4096, 1, 1);
+    const silentGain = ctx.createGain();
     silentGain.gain.value = 0; // no reproducir el propio mic por el speaker
     processor.onaudioprocess = (e) => {
       if (!micOnRef.current) return;
       const ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
       const input = e.inputBuffer.getChannelData(0);
-      const pcm16 = new Int16Array(input.length);
-      for (let i = 0; i < input.length; i++) {
-        const s = Math.max(-1, Math.min(1, input[i]));
-        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-      }
+      const pcm16 = resampleTo16kPCM(input, fromSampleRate);
       const bytes = new Uint8Array(pcm16.buffer);
       let binary = '';
       for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
@@ -245,15 +281,15 @@ export default function SalaPage() {
     };
     source.connect(processor);
     processor.connect(silentGain);
-    silentGain.connect(micCtx.destination);
+    silentGain.connect(ctx.destination);
     micProcessorRef.current = processor;
   }, []);
 
   const stopCandidateAudioCapture = useCallback(() => {
     micProcessorRef.current?.disconnect();
     micProcessorRef.current = null;
-    micCtxRef.current?.close().catch(() => {});
-    micCtxRef.current = null;
+    micSourceRef.current?.disconnect();
+    micSourceRef.current = null;
   }, []);
 
   // ── Join call ─────────────────────────────────────────────────────────────
@@ -305,8 +341,7 @@ export default function SalaPage() {
         if (msg.type === 'question') setSubtitle(msg.text ?? '');
         if (msg.type === 'status' && msg.status === 'en_curso') setLeiaThinking(true);
         if (msg.type === 'stop_audio') {
-          audioQueueRef.current = [];
-          try { currentSourceRef.current?.stop(); } catch { /* noop */ }
+          stopPlaybackRef.current();
         }
         if (msg.type === 'finished') endCall();
         if (msg.type === 'report_ready') {
@@ -445,7 +480,7 @@ export default function SalaPage() {
     phaseRef.current = 'finished';
     stopListeningRef.current();
     if (timerRef.current) clearInterval(timerRef.current);
-    audioQueueRef.current = [];
+    stopPlaybackRef.current();
 
     if (recorderRef.current) await stopRecording(true);
     audioCtxRef.current?.close().catch(() => {});
@@ -469,7 +504,7 @@ export default function SalaPage() {
     streamRef.current?.getAudioTracks().forEach(t => (t.enabled = next));
     if (!next) {
       stopListeningRef.current();
-    } else if (phaseRef.current === 'running' && !playingRef.current) {
+    } else if (phaseRef.current === 'running' && !leiaSpeakingRef.current) {
       startListeningRef.current();
     }
   }, []);
