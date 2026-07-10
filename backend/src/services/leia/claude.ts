@@ -119,7 +119,11 @@ Reglas:
 - Saludá por el nombre, presentate, mencioná los ${input.job.preferences.durationMinutes} min de duración.
 - Cerrá con UNA pregunta abierta conectada al puesto y al stack.
 - Hablás natural, no acartonada. Variá las aperturas. No uses "espero que estés bien".
-- 3-4 oraciones máximo.
+- 3-4 oraciones máximo.${
+      input.cvText
+        ? '\n- El candidato subió su CV (viene en el mensaje). Tu apertura DEBE referenciar al menos un dato concreto del CV (empresa, tecnología o duración) — natural, sin recitarlo.'
+        : ''
+    }
 Devolvé SOLO el texto a decir.`;
     const cvSection = input.cvText ? `\nCV del candidato (texto extraído):\n${input.cvText.slice(0, 3000)}` : '';
     try {
@@ -177,6 +181,7 @@ Devolvé SOLO el texto a decir.`;
           fullTranscript: input.fullTranscript.map((t) => ({ speaker: t.speaker, text: t.text })),
           durationSec: input.durationSec,
           behavior: input.behavior ?? null,
+          cvText: input.cvText,
         }),
         maxTokens: 1600,
         temperature: 0.3,
@@ -216,6 +221,7 @@ Devolvé SOLO el texto a decir.`;
             flags: e.flags,
           })),
           behavior: input.behavior ?? null,
+          cvText: input.cvText,
         }),
         maxTokens: 1700,
         temperature: 0.3,

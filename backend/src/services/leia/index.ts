@@ -66,6 +66,8 @@ export interface Report1Input {
   durationSec: number;
   language: string;
   behavior?: BehavioralAnalysis | null;
+  /** Texto plano del CV del candidato, si subió uno (Etapa 1). */
+  cvText?: string | null;
 }
 
 export interface Report2Input {
@@ -79,6 +81,8 @@ export interface Report2Input {
     flags: string[];
   }>;
   behavior?: BehavioralAnalysis | null;
+  /** Texto plano del CV del candidato, si subió uno (Etapa 1). */
+  cvText?: string | null;
 }
 
 export interface LeiaService {

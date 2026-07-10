@@ -735,6 +735,7 @@ export class InterviewEngine {
         durationSec,
         language: this.job.requirements.language,
         behavior,
+        cvText: this.interview.cvText,
       });
       report1 = await this.db.createReport({
         id: uuid(),
@@ -765,6 +766,7 @@ export class InterviewEngine {
         candidateName: this.candidate.name,
         evaluations: evalForLeia,
         behavior,
+        cvText: this.interview.cvText,
       });
 
       // Analíticas determinísticas (no las dejamos al criterio del LLM):

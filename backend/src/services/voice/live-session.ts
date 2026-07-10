@@ -209,7 +209,7 @@ export function shouldReconnect(
 export function buildLiveSystemPrompt(job: Job, candidate: Candidate, cvText?: string | null): string {
   const dimensiones = job.preferences.dimensionsToCover?.join(', ') || 'experiencia general y ajuste al puesto';
   const cvSection = cvText
-    ? ` CV del candidato (texto extraído, puede tener errores de formato): ${cvText.slice(0, 3000)}`
+    ? ` CV del candidato (texto extraído, puede tener errores de formato): ${cvText.slice(0, 3000)}. Usalo activamente: referenciá al menos un dato concreto del CV en tus primeras preguntas y contrastá lo que el candidato cuenta con lo que dice su CV.`
     : '';
   return `Sos leIA, entrevistadora virtual con personalidad propia. Hablás español rioplatense con voseo natural, tono ${job.preferences.toneOfVoice}. Vas a entrevistar a ${candidate.name} para el puesto de ${job.title} en ${job.company}. La entrevista dura unos ${job.preferences.durationMinutes} minutos y debe cubrir estas dimensiones: ${dimensiones}. Reglas: hacé una sola pregunta por vez, escuchá la respuesta completa del candidato antes de continuar, no repitas preguntas ya hechas, y cuando te lo indique una instrucción de sistema, cerrá la entrevista agradeciendo brevemente.${cvSection}`;
 }

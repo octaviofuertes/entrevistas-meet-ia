@@ -41,6 +41,7 @@ CONVERSACIÓN:
 8. shouldFinish=true SOLO si ya cubriste TODAS las dimensiones objetivo con profundidad Y hubo varias preguntas, o si se acabó el tiempo. NUNCA cierres temprano. Aclaraciones nunca disparan shouldFinish.
 9. Variá el arranque: "Contame…", "Y respecto a…", "Volviendo a lo que dijiste de…", "Te tiro un escenario:", "¿Cómo lo verías si…", "Cambiando un poco,". No empieces dos preguntas seguidas igual.
 10. NO seas servil ni adulador. Sos una colega senior con criterio.
+11. Si el turno incluye una sección "CV DEL CANDIDATO": usalo activamente. Referenciá al menos UN dato concreto del CV (empresa, tecnología, duración, proyecto) dentro de los primeros 3 turnos si todavía no lo hiciste, y usá el CV para elegir ángulos de pregunta y detectar coincidencias o contradicciones con lo que el candidato responde.
 
 SALIDA — JSON puro, sin markdown:
 {"evaluation":{"score":<0-10>,"dimensions":{"comunicacion":<0-10>,"tecnicos":<0-10>,"experiencia":<0-10>,"resolucion":<0-10>,"actitud":<0-10>,"trabajoEquipo":<0-10>},"flags":[],"rationale":"1 oración"},"nextQuestion":"...","isClarification":false,"shouldFinish":false}`;
@@ -75,7 +76,7 @@ export function buildEvaluatePrompt(input: {
     : '(ninguna)';
 
   const cvSection = input.cvText
-    ? `\nCV DEL CANDIDATO (texto extraído, puede tener errores de formato):\n${truncate(input.cvText, 3000)}\n`
+    ? `\nCV DEL CANDIDATO (texto extraído, puede tener errores de formato — usalo según la regla 11 del system prompt):\n${truncate(input.cvText, 3000)}\n`
     : '';
 
   return `PUESTO: ${input.job.title} en ${input.job.company} · ${reqs.seniority} · ${reqs.yearsOfExperience}+ años
@@ -109,6 +110,7 @@ REGLAS DE PRECISIÓN:
 - NO inventes hechos, números ni cosas que no se dijeron.
 - Citá frases textuales del candidato cuando agreguen valor (entre comillas, breves).
 - Cuando el análisis facial da una señal (mirada baja prolongada, ausencia, cambios de expresión), descríbela con tacto profesional y SOLO si la duración o frecuencia es significativa (>10% del tiempo). Usá lenguaje cuidadoso ("se observó", "se notó un patrón de…").
+- Si se incluye el CV del candidato: contrastá la entrevista contra el CV. Señalá coincidencias confirmadas, temas relevantes del CV que NO se exploraron, e inconsistencias — pero SOLO señalá una inconsistencia si podés citar la frase del CV y la frase de la entrevista que chocan. No inventes.
 
 CALIDAD DEL RESUMEN (clave):
 - "summary": 5-8 oraciones, redacción fluida y profesional en español rioplatense neutro. Cubrí: cómo arrancó y fluyó la charla, el nivel general que mostró el candidato, su forma de comunicar, y una impresión global honesta. Que se lea como lo escribiría una entrevistadora humana experimentada, no como bullets pegados.
@@ -135,6 +137,7 @@ REGLAS DE PRECISIÓN:
 - Las fortalezas/debilidades deben ser CONCRETAS y mencionar evidencia (frase, tema, dimensión).
 - Si el análisis facial muestra mirada baja prolongada > 25% del tiempo, mencionalo con cuidado en behavioralObservations y marcá suspectedReading=true. Si es 10-25%, mencionalo pero suspectedReading=false. Si <10%, no menciones.
 - Cualquier flag "incomprensible" o "no_responde_lo_preguntado" debe aparecer en weaknesses.
+- Si se incluye el CV del candidato: contrastá la entrevista contra el CV. Señalá coincidencias confirmadas, temas relevantes del CV que NO se exploraron, e inconsistencias — pero SOLO señalá una inconsistencia si podés citar la frase del CV y la frase de la entrevista que chocan. No inventes.
 
 EXECUTIVE SUMMARY (lo primero que se lee):
 - "executiveSummary": 4-6 oraciones, redacción profesional y prolija. Sintetizá el desempeño global, el nivel técnico, la actitud/comunicación y la conclusión. Debe poder leerse solo y dar una imagen clara del candidato.
@@ -171,6 +174,7 @@ export function buildReport1Prompt(input: {
   fullTranscript: Array<{ speaker: 'bot' | 'candidate'; text: string }>;
   durationSec: number;
   behavior?: BehavioralAnalysis | null;
+  cvText?: string | null;
 }): string {
   const t = input.fullTranscript
     .map((x) => `${x.speaker === 'bot' ? 'leIA' : input.candidateName}: ${x.text}`)
@@ -183,7 +187,7 @@ TRANSCRIPCIÓN:
 ${t}
 
 ${behaviorBlock(input.behavior, input.durationSec)}
-
+${cvBlock(input.cvText)}
 Devolvé el Informe 1 en el JSON exacto especificado.`;
 }
 
@@ -192,6 +196,7 @@ export function buildReport2Prompt(input: {
   candidateName: string;
   evaluations: Array<{ question: string; transcript: string; score: number; dims: DimensionScores; flags?: string[] }>;
   behavior?: BehavioralAnalysis | null;
+  cvText?: string | null;
 }): string {
   const reqs = input.job.requirements;
   const evalsText = input.evaluations
@@ -211,8 +216,13 @@ EVALUACIONES POR TURNO:
 ${evalsText}
 
 ${behaviorBlock(behavior, undefined)}
-
+${cvBlock(input.cvText)}
 Devolvé el Informe 2 en el JSON exacto especificado. Generá un score por cada tecnología en stackScores y usá los flags como evidencia para weaknesses.`;
+}
+
+function cvBlock(cvText?: string | null): string {
+  if (!cvText) return '';
+  return `\nCV DEL CANDIDATO (texto extraído):\n${truncate(cvText, 3000)}\n`;
 }
 
 function behaviorBlock(b: BehavioralAnalysis | null | undefined, durationSec?: number): string {

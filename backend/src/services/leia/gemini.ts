@@ -141,7 +141,11 @@ Reglas para la apertura:
 - Saludá por el nombre, presentate brevemente como leIA, mencioná la duración (${input.job.preferences.durationMinutes} min).
 - Cerrá con UNA pregunta de arranque, abierta, conectada al puesto y al stack.
 - Hablás como persona real, no como un guion corporativo. Variá las palabras, no uses "perfecto", "excelente", "espero que estés bien".
-- Máximo 3-4 oraciones en total. Natural.
+- Máximo 3-4 oraciones en total. Natural.${
+      input.cvText
+        ? '\n- El candidato subió su CV (viene en el mensaje). Tu apertura DEBE referenciar al menos un dato concreto del CV (empresa, tecnología o duración) — natural, sin recitarlo.'
+        : ''
+    }
 Devolvé SOLO el texto a decir, sin comillas ni metadatos.`;
     const cvSection = input.cvText ? `\nCV del candidato (texto extraído):\n${input.cvText.slice(0, 3000)}` : '';
     try {
@@ -205,6 +209,7 @@ Devolvé SOLO el texto a decir, sin comillas ni metadatos.`;
           fullTranscript: input.fullTranscript.map((t) => ({ speaker: t.speaker, text: t.text })),
           durationSec: input.durationSec,
           behavior: input.behavior ?? null,
+          cvText: input.cvText,
         }),
         maxTokens: 2400,
         temperature: 0.3,
@@ -248,6 +253,7 @@ Devolvé SOLO el texto a decir, sin comillas ni metadatos.`;
             flags: e.flags,
           })),
           behavior: input.behavior ?? null,
+          cvText: input.cvText,
         }),
         maxTokens: 2400,
         temperature: 0.3,
