@@ -6,6 +6,8 @@ import type { Job, Candidate } from '../../types';
 
 const MODEL = 'gemini-2.5-flash-native-audio-latest';
 const OUTPUT_SAMPLE_RATE = 24000;
+const MAX_RECONNECT_ATTEMPTS = 2;
+const RECONNECT_DELAY_MS = 500;
 
 export interface VoiceSessionEvents {
   onAudio: (wavBase64: string, durationMs: number) => void;
@@ -25,18 +27,47 @@ export interface VoiceSessionEvents {
 export class VoiceSession {
   private session: any;
   private events: VoiceSessionEvents;
+  private ai: GoogleGenAI | null = null;
+  private job!: Job;
+  private candidate!: Candidate;
+  private cvText?: string | null;
+
+  private resumptionHandle: string | undefined;
+  private intentionalClose = false;
+  private reconnecting = false;
+  private reconnectAttempts = 0;
 
   constructor(events: VoiceSessionEvents) {
     this.events = events;
   }
 
   async connectAndGreet(job: Job, candidate: Candidate, cvText?: string | null): Promise<void> {
-    const ai = new GoogleGenAI({ apiKey: config.GEMINI_API_KEY });
-    const systemInstruction = buildLiveSystemPrompt(job, candidate, cvText);
+    this.job = job;
+    this.candidate = candidate;
+    this.cvText = cvText;
+    this.ai = new GoogleGenAI({ apiKey: config.GEMINI_API_KEY });
+
+    await this.openSession();
+
+    this.session.sendClientContent({
+      turns: `Arrancá la entrevista: saludá brevemente a ${candidate.name} presentándote como leIA, y después hacé la primera pregunta.`,
+      turnComplete: true,
+    });
+  }
+
+  /**
+   * Abre (o reabre, con `handle`) la conexión Live. `sessionResumption` +
+   * `contextWindowCompression` sostienen sesiones más largas que los límites
+   * documentados del proveedor (~10 min de conexión, ~15 min de audio sin
+   * compresión); `goAway`/cierre inesperado disparan `reconnect()` con el
+   * último handle recibido.
+   */
+  private async openSession(handle?: string): Promise<void> {
+    const systemInstruction = buildLiveSystemPrompt(this.job, this.candidate, this.cvText);
     const sentAt = Date.now();
     let firstAudioAt = 0;
 
-    this.session = await ai.live.connect({
+    this.session = await this.ai!.live.connect({
       model: MODEL,
       config: {
         responseModalities: [Modality.AUDIO],
@@ -44,10 +75,29 @@ export class VoiceSession {
         inputAudioTranscription: {},
         outputAudioTranscription: {},
         thinkingConfig: { thinkingBudget: 0 },
+        sessionResumption: handle ? { handle } : {},
+        contextWindowCompression: { slidingWindow: {} },
       },
       callbacks: {
         onopen: () => logger.info('voice-session: conectado a Gemini Live'),
         onmessage: (msg: any) => {
+          if (msg.sessionResumptionUpdate?.resumable && msg.sessionResumptionUpdate?.newHandle) {
+            this.resumptionHandle = msg.sessionResumptionUpdate.newHandle;
+            logger.debug(
+              { handlePrefix: this.resumptionHandle!.slice(0, 12) },
+              'voice-session: nuevo handle de resumption'
+            );
+          }
+          if (msg.goAway) {
+            logger.info(
+              { timeLeft: msg.goAway.timeLeft },
+              'voice-session: goAway recibido, reconectando proactivamente'
+            );
+            this.reconnect().catch((err) => {
+              logger.warn({ err }, 'voice-session: reconexión tras goAway falló');
+            });
+          }
+
           const sc = msg.serverContent;
           if (sc?.interrupted) {
             this.events.onInterrupted();
@@ -77,14 +127,48 @@ export class VoiceSession {
           }
         },
         onerror: (e: any) => this.events.onError(new Error(e?.message ?? String(e))),
-        onclose: (e: any) => this.events.onClose(e?.code, e?.reason),
+        onclose: (e: any) => {
+          if (this.intentionalClose || this.reconnecting) return;
+          if (shouldReconnect(this.intentionalClose, this.reconnecting, this.resumptionHandle, this.reconnectAttempts)) {
+            this.reconnect()
+              .then((ok) => {
+                if (!ok) this.events.onClose(e?.code, e?.reason);
+              })
+              .catch((err) => {
+                logger.warn({ err }, 'voice-session: reconexión tras cierre inesperado falló');
+                this.events.onClose(e?.code, e?.reason);
+              });
+          } else {
+            this.events.onClose(e?.code, e?.reason);
+          }
+        },
       },
     });
+  }
 
-    this.session.sendClientContent({
-      turns: `Arrancá la entrevista: saludá brevemente a ${candidate.name} presentándote como leIA, y después hacé la primera pregunta.`,
-      turnComplete: true,
-    });
+  /** Reconecta con el último handle de resumption. No re-saluda: el estado se restaura del lado del servidor. */
+  private async reconnect(): Promise<boolean> {
+    if (!this.resumptionHandle) return false;
+    if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      logger.warn('voice-session: se agotaron los reintentos de reconexión');
+      return false;
+    }
+    this.reconnecting = true;
+    this.reconnectAttempts++;
+    try {
+      try {
+        this.session?.close();
+      } catch {
+        /* noop */
+      }
+      await new Promise((r) => setTimeout(r, RECONNECT_DELAY_MS));
+      await this.openSession(this.resumptionHandle);
+      this.reconnectAttempts = 0;
+      logger.info('voice-session: reconectado con handle de resumption');
+      return true;
+    } finally {
+      this.reconnecting = false;
+    }
   }
 
   /** Audio del candidato, pausado a tiempo real por quien llama (nunca en ráfaga). */
@@ -100,12 +184,26 @@ export class VoiceSession {
   }
 
   close() {
+    this.intentionalClose = true;
     try {
       this.session?.close();
     } catch {
       /* noop */
     }
   }
+}
+
+/** Decide si conviene reconectar ante un cierre: no si fue intencional, ya está reconectando, no hay handle, o se agotaron los intentos. */
+export function shouldReconnect(
+  intentionalClose: boolean,
+  reconnecting: boolean,
+  handle: string | undefined,
+  attempts: number,
+  maxAttempts = MAX_RECONNECT_ATTEMPTS
+): boolean {
+  if (intentionalClose || reconnecting) return false;
+  if (!handle) return false;
+  return attempts < maxAttempts;
 }
 
 export function buildLiveSystemPrompt(job: Job, candidate: Candidate, cvText?: string | null): string {

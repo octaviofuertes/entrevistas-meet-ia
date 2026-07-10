@@ -60,7 +60,10 @@ export class MockLeia implements LeiaService {
         : tone === 'tecnico'
           ? 'Bienvenido'
           : 'Hola';
-    const cvAck = input.cvText ? ' Ya vi tu CV, así que voy a hacerte alguna pregunta más puntual.' : '';
+    const highlight = input.cvText ? extractCvHighlight(input.cvText, input.candidateName) : null;
+    const cvAck = highlight
+      ? ` Vi en tu CV que mencionás «${highlight}» — más adelante quiero que me cuentes de eso.`
+      : '';
     return `${opener} ${input.candidateName}, soy leIA, la entrevistadora virtual para el puesto de ${input.job.title} en ${input.job.company}. Vamos a tener una conversación de unos ${input.job.preferences.durationMinutes} minutos.${cvAck} Para empezar, contame brevemente sobre tu experiencia y qué te motivó a postularte a este puesto.`;
   }
 
@@ -413,6 +416,31 @@ function pickNextQuestion(input: {
   );
   const candidates = fresh.length ? fresh : pool;
   return candidates[input.turnIndex % candidates.length];
+}
+
+/**
+ * Fragmento notable del CV para citar en el saludo (AC-NEW-06): la secuencia
+ * de palabras capitalizadas más larga que no forme parte del nombre del
+ * candidato (nombres de empresas, tecnologías, instituciones). Si no hay
+ * ninguna, la primera línea no vacía del CV, truncada.
+ */
+export function extractCvHighlight(cvText: string, candidateName: string): string | null {
+  const text = (cvText || '').trim();
+  if (!text) return null;
+
+  const nameLower = candidateName.toLowerCase();
+  // El conector entre palabras capitalizadas es solo espacio/tab (no salto de
+  // línea): evita fusionar el nombre de una línea con una palabra de la
+  // siguiente (ej. "Ana Pérez" + "Trabajé" en líneas distintas del CV).
+  const matches = text.match(/\b[A-ZÁÉÍÓÚÑ][\wÀ-ÿ]*(?:[ \t]+[A-ZÁÉÍÓÚÑ][\wÀ-ÿ]*)*\b/g) ?? [];
+  const candidates = matches
+    .filter((m) => m.length >= 3 && !nameLower.includes(m.toLowerCase()))
+    .sort((a, b) => b.length - a.length);
+  if (candidates.length > 0) return candidates[0];
+
+  const firstLine = text.split('\n').map((l) => l.trim()).find((l) => l.length > 0);
+  if (!firstLine) return null;
+  return firstLine.length > 60 ? `${firstLine.slice(0, 60)}…` : firstLine;
 }
 
 function extractKeyword(answer: string): string | null {

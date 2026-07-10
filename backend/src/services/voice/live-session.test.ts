@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildLiveSystemPrompt } from './live-session';
+import { buildLiveSystemPrompt, shouldReconnect } from './live-session';
 import type { Job, Candidate } from '../../types';
 
 const job: Job = {
@@ -57,5 +57,28 @@ describe('buildLiveSystemPrompt', () => {
     const prompt = buildLiveSystemPrompt(job, candidate, null);
     expect(prompt).not.toContain('undefined');
     expect(prompt).not.toContain('CV del candidato');
+  });
+});
+
+describe('shouldReconnect', () => {
+  it('no reconecta si el cierre fue intencional', () => {
+    expect(shouldReconnect(true, false, 'handle-1', 0)).toBe(false);
+  });
+
+  it('no reconecta si ya está reconectando', () => {
+    expect(shouldReconnect(false, true, 'handle-1', 0)).toBe(false);
+  });
+
+  it('no reconecta si no hay handle de resumption', () => {
+    expect(shouldReconnect(false, false, undefined, 0)).toBe(false);
+  });
+
+  it('reconecta si hay handle, no es intencional, y quedan intentos', () => {
+    expect(shouldReconnect(false, false, 'handle-1', 0)).toBe(true);
+    expect(shouldReconnect(false, false, 'handle-1', 1)).toBe(true);
+  });
+
+  it('no reconecta si se agotaron los intentos', () => {
+    expect(shouldReconnect(false, false, 'handle-1', 2)).toBe(false);
   });
 });
