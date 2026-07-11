@@ -15,6 +15,19 @@ import { recallWebhookRoute } from './realtime/recall-webhook';
 import { botStageRoute } from './realtime/bot-stage';
 import { browserSalaRoute } from './realtime/browser-sala';
 
+// Red de seguridad de proceso: algunas dependencias (ej. msedge-tts) dejan
+// promesas sin handler de rechazo en su código interno, fuera de cualquier
+// try/catch nuestro. Sin este handler, Node mata el proceso entero ante esas
+// rejections. Logueamos fuerte y seguimos vivos — ver FIX-TTS-ROBUSTEZ.
+let unhandledRejections = 0;
+process.on('unhandledRejection', (reason) => {
+  unhandledRejections++;
+  logger.error(
+    { err: reason instanceof Error ? reason : new Error(String(reason)), count: unhandledRejections },
+    'unhandledRejection capturada — el proceso sigue vivo (ver FIX-TTS-ROBUSTEZ)'
+  );
+});
+
 async function buildServer() {
   const app = Fastify({
     logger,

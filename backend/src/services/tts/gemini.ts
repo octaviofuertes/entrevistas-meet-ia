@@ -1,6 +1,7 @@
 import { config } from '../../config';
 import { logger } from '../../logger';
 import type { TTSService, TTSResult } from './index';
+import { TTS_SYNTH_TIMEOUT_MS } from './index';
 import { EdgeTTS } from './edge';
 
 /**
@@ -41,6 +42,7 @@ export class GeminiTTS implements TTSService {
             },
           },
         }),
+        signal: AbortSignal.timeout(TTS_SYNTH_TIMEOUT_MS),
       });
 
       if (!res.ok) {
