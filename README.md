@@ -62,7 +62,32 @@ proveedor externo correspondiente para su evaluación — no es una limitación
 | Requiere URL de Meet | No | Sí, se pega a mano al agendar (no se genera automáticamente) |
 | Transcripción | Web Speech del navegador del candidato | `recallai_streaming` (STT propio de Recall.ai — **no** son los captions nativos de Meet) |
 | Costo aproximado (20 min, drivers reales) | Sin Recall.ai | + Recall.ai ≈ USD 0.20 |
-| Estado | Rama activa, en integración | Estable |
+| Estado | Verificado con drivers reales (Gemini Live, TTS, CV) | Estable |
+
+## Modo de voz: Live vs Pipeline
+
+Cada entrevista fija su `voiceMode` al crearse (`POST /api/interviews`, campo
+`voiceMode: "live" | "pipeline"`, default `pipeline`):
+
+- **`pipeline`** (default) — ciclo clásico por turno: STT → leIA evalúa/genera
+  la siguiente pregunta → TTS. Funciona en ambos canales.
+- **`live`** — Gemini Live API conduce la conversación de punta a punta en
+  tiempo real (audio↔audio), con **barge-in** (el candidato puede interrumpir
+  a leIA y viceversa), **reconexión automática** ante cortes (session
+  resumption + reintento con backoff) y menor latencia percibida. Requiere
+  `GEMINI_API_KEY`. Si la sesión Live falla de forma irrecuperable, la
+  entrevista cae automáticamente al modo `pipeline` para no cortar la
+  experiencia del candidato.
+
+## CV del candidato
+
+El candidato puede subir su CV en PDF desde el lobby de la sala nativa
+(`POST /api/sala/:id/cv`, sin auth — pensado para el flujo público del
+candidato). El texto extraído (`cvText`) queda asociado a la entrevista y
+leIA lo usa activamente: lo referencia con datos concretos (empresa,
+tecnología, duración) en la apertura y los primeros turnos, y lo contrasta
+contra lo conversado en los informes finales (coincidencias, temas no
+explorados, inconsistencias con cita textual).
 
 ## Arrancar en 3 minutos (modo demo)
 
@@ -161,6 +186,7 @@ GET    /api/reports/:interviewId/1
 GET    /api/reports/:interviewId/2
 GET    /api/reports/by-interview/:interviewId
 GET    /api/sala/:id/info          → info pública para la vista del candidato (sala nativa)
+POST   /api/sala/:id/cv            → sube el CV en PDF del candidato (sin auth, sala nativa)
 ```
 
 WebSockets:
