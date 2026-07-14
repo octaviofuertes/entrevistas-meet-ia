@@ -1,6 +1,7 @@
 import { config } from '../../config';
 import { logger } from '../../logger';
 import type { TTSService, TTSResult } from './index';
+import { TTS_SYNTH_TIMEOUT_MS } from './index';
 import { EdgeTTS } from './edge';
 
 /**
@@ -41,6 +42,7 @@ export class GeminiTTS implements TTSService {
             },
           },
         }),
+        signal: AbortSignal.timeout(TTS_SYNTH_TIMEOUT_MS),
       });
 
       if (!res.ok) {
@@ -92,7 +94,7 @@ function parseRateFromMime(mime: string): number | undefined {
  * Sin compresión, sin pérdida — el <audio> nativo del Chrome del bot lo
  * reproduce limpio sin glitches de decodificación.
  */
-function pcmToWav(pcm: Buffer, sampleRate: number, channels = 1, bitsPerSample = 16): Buffer {
+export function pcmToWav(pcm: Buffer, sampleRate: number, channels = 1, bitsPerSample = 16): Buffer {
   const byteRate = (sampleRate * channels * bitsPerSample) / 8;
   const blockAlign = (channels * bitsPerSample) / 8;
   const header = Buffer.alloc(44);

@@ -17,6 +17,25 @@ export interface TTSService {
   synthesize(text: string, opts?: { voiceId?: string }): Promise<TTSResult>;
 }
 
+export const TTS_SYNTH_TIMEOUT_MS = 12_000;
+
+/** Rechaza con Error(`${label}: timeout tras ${ms}ms`) si la promesa no resuelve a tiempo. */
+export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label}: timeout tras ${ms}ms`)), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      }
+    );
+  });
+}
+
 const instances = new Map<TTSDriver, TTSService>();
 
 export function getTTS(driver: TTSDriver = config.TTS_DRIVER): TTSService {

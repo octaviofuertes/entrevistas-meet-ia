@@ -15,7 +15,10 @@ import { getLeia } from '../leia';
 import { getTTS, type TTSService, type TTSResult } from '../tts';
 import { getRecall, getBrowserRecall } from '../recall';
 import type { RecallService } from '../recall';
+import { browserSalaBus } from '../recall/browser';
+import { VoiceSession, registerVoiceSession, disposeVoiceSession } from '../voice/live-session';
 import { computeQualityDistribution, computeSentimentFallback, isEmptySentiment } from './analytics';
+import type { EvaluateOutput } from '../leia';
 
 /**
  * InterviewEngine: orquesta el ciclo de una entrevista v2.
@@ -60,6 +63,15 @@ export class InterviewEngine {
   private fillerAudios: Array<{ audioBase64: string; mimeType: string; durationMs: number }> = [];
   private fillerPlaying = false;
 
+  // ---- Modo voiceMode='live' (Gemini Live conduce la conversación) ----
+  private voiceSession: VoiceSession | null = null;
+  private liveInputBuf = '';
+  private liveOutputBuf = '';
+  private livePendingQuestion = '';
+  private liveClosingRequested = false;
+  private liveFallingBack = false;
+  private lastEvaluateResult: EvaluateOutput | null = null;
+
   constructor(private db: Database, interviewId: string) {
     this.interviewId = interviewId;
   }
@@ -98,6 +110,7 @@ export class InterviewEngine {
     const introPromise = this.leia.firstQuestion({
       job: this.job,
       candidateName: this.candidate.name,
+      cvText: iv.cvText,
     });
     this.leia
       .generateFillers({ job: this.job, candidateName: this.candidate.name })
@@ -136,8 +149,62 @@ export class InterviewEngine {
         this.emit('interview_status', { status: 'agendada' });
         throw err;
       }
-      const intro = await introPromise;
-      await this.askQuestion(intro); // sentence streaming — no preTtsAudio
+      if (iv.voiceMode === 'live') {
+        // Gemini Live conduce la conversación completa (turnos, barge-in);
+        // el engine escucha las transcripciones para reconstruir turnos y
+        // puntuarlos con leia.evaluate(), y cae al pipeline TTS ante error.
+        const voiceSession = new VoiceSession({
+          onAudio: (wavBase64, durationMs) => {
+            browserSalaBus.send(this.interviewId, {
+              type: 'audio',
+              mimeType: 'audio/wav',
+              audioBase64: wavBase64,
+              durationMs,
+            });
+          },
+          onOutputTranscript: (text) => {
+            this.liveOutputBuf += text;
+          },
+          onInputTranscript: (text) => {
+            this.liveInputBuf += text;
+          },
+          onInterrupted: () => {
+            logger.info({ interviewId: this.interviewId }, 'voice-session: barge-in — audio interrumpido por el candidato');
+            browserSalaBus.send(this.interviewId, { type: 'stop_audio' });
+          },
+          onTurnComplete: () => {
+            this.handleLiveTurnComplete().catch((err) => {
+              logger.error({ err, interviewId: this.interviewId }, 'voice-session: error procesando turnComplete');
+            });
+          },
+          onError: (err) => {
+            logger.warn({ err, interviewId: this.interviewId }, 'voice-session: error de conexión Live');
+            this.fallbackFromLive().catch((e) => {
+              logger.error({ err: e, interviewId: this.interviewId }, 'voice-session: fallback falló');
+            });
+          },
+          onClose: (code, reason) => {
+            logger.info({ interviewId: this.interviewId, code, reason }, 'voice-session: sesión Live cerrada');
+            if (!this.finished && !this.liveClosingRequested) {
+              this.fallbackFromLive().catch((e) => {
+                logger.error({ err: e, interviewId: this.interviewId }, 'voice-session: fallback falló');
+              });
+            }
+          },
+        });
+        this.voiceSession = voiceSession;
+        registerVoiceSession(this.interviewId, voiceSession);
+        introPromise.catch(() => {}); // no se consume en modo live, evita unhandled rejection
+        try {
+          await voiceSession.connectAndGreet(this.job, this.candidate, iv.cvText);
+        } catch (err) {
+          logger.warn({ err, interviewId: this.interviewId }, 'voice-session: no se pudo conectar a Gemini Live');
+          await this.fallbackFromLive();
+        }
+      } else {
+        const intro = await introPromise;
+        await this.askQuestion(intro); // sentence streaming — no preTtsAudio
+      }
     } else {
       // MODO MEET: pre-sintetizar el saludo antes de joinMeet para enviarlo
       // como automatic_audio_output en el mismo request (evita round-trip extra).
@@ -185,6 +252,11 @@ export class InterviewEngine {
     this.finished = true;
     if (this.silenceTimer) clearTimeout(this.silenceTimer);
     if (this.autoFinishTimer) clearTimeout(this.autoFinishTimer);
+    if (this.voiceSession) {
+      this.voiceSession.close();
+      disposeVoiceSession(this.interviewId);
+      this.voiceSession = null;
+    }
 
     const endMs = Date.now();
     const durationSec = Math.round((endMs - this.startedAtMs) / 1000);
@@ -463,6 +535,7 @@ export class InterviewEngine {
       lastAnswer: text,
       turnIndex: this.turnIndex,
       elapsedSec,
+      cvText: this.interview.cvText,
     });
 
     // Cinturón de seguridad: si la próxima pregunta es muy parecida a alguna ya
@@ -481,6 +554,7 @@ export class InterviewEngine {
             ` [Nota interna: la pregunta "${truncate(result.nextQuestion, 120)}" es muy parecida a "${truncate(repeat, 120)}" — generá una distinta, sobre otro ángulo del puesto.]`,
           turnIndex: this.turnIndex,
           elapsedSec,
+          cvText: this.interview.cvText,
         });
         // Si la segunda también es similar, dejamos pasar para no entrar en loop.
         result = retried;
@@ -533,6 +607,106 @@ export class InterviewEngine {
     await this.askQuestion(result.nextQuestion, { isClarification: !!result.isClarification });
   }
 
+  /**
+   * Cada turnComplete de Gemini Live cierra el par pregunta/respuesta anterior
+   * (reconstruido de las transcripciones) y abre el siguiente. La evaluación
+   * de leia.evaluate() se usa solo para puntuar y para decidir el cierre —
+   * su nextQuestion se descarta: en modo live, Live decide su propia pregunta.
+   */
+  private async handleLiveTurnComplete() {
+    if (this.finished) return;
+
+    if (this.liveClosingRequested) {
+      this.voiceSession?.close();
+      disposeVoiceSession(this.interviewId);
+      this.voiceSession = null;
+      await this.stop('auto');
+      return;
+    }
+
+    const candidateAnswer = this.liveInputBuf.trim();
+    const leiaUtterance = this.liveOutputBuf.trim();
+    this.liveInputBuf = '';
+    this.liveOutputBuf = '';
+
+    if (candidateAnswer && this.livePendingQuestion) {
+      const turn: InterviewTurn = {
+        id: uuid(),
+        interviewId: this.interviewId,
+        index: this.turnIndex,
+        question: this.livePendingQuestion,
+        questionAt: new Date().toISOString(),
+        answerTranscript: candidateAnswer,
+        answerAt: new Date().toISOString(),
+        durationSec: 0,
+        evaluationId: null,
+      };
+      const created = await this.db.createTurn(turn);
+      this.emit('question_generated', { question: this.livePendingQuestion, index: this.turnIndex });
+
+      const history = await this.db.listTurns(this.interviewId);
+      const elapsedSec = Math.round((Date.now() - this.startedAtMs) / 1000);
+      const result = await this.leia.evaluate({
+        job: this.job,
+        candidateName: this.candidate.name,
+        history,
+        lastQuestion: this.livePendingQuestion,
+        lastAnswer: candidateAnswer,
+        turnIndex: this.turnIndex,
+        elapsedSec,
+        cvText: this.interview.cvText,
+      });
+      this.lastEvaluateResult = result;
+
+      const evaluation: Evaluation = {
+        id: uuid(),
+        interviewId: this.interviewId,
+        turnId: created.id,
+        score: result.evaluation.score,
+        dimensions: result.evaluation.dimensions,
+        flags: result.evaluation.flags,
+        rationale: result.evaluation.rationale,
+        createdAt: new Date().toISOString(),
+      };
+      await this.db.createEvaluation(evaluation);
+      await this.db.updateTurn(created.id, { evaluationId: evaluation.id });
+      this.emit('leia_evaluation_ready', { evaluation, turnId: created.id });
+
+      this.turnIndex++;
+
+      if (result.shouldFinish) {
+        this.liveClosingRequested = true;
+        this.voiceSession?.sendTextInstruction(
+          'Es momento de cerrar la entrevista: agradecé brevemente al candidato y despedite.'
+        );
+      }
+    }
+
+    if (leiaUtterance) {
+      this.livePendingQuestion = leiaUtterance;
+    }
+  }
+
+  /** Ante error/cierre inesperado de Gemini Live, seguimos con el pipeline TTS existente. */
+  private async fallbackFromLive() {
+    if (this.finished || this.liveFallingBack) return;
+    this.liveFallingBack = true;
+    logger.warn({ interviewId: this.interviewId }, 'voice-session: fallback a pipeline TTS');
+
+    if (this.voiceSession) {
+      this.voiceSession.close();
+      disposeVoiceSession(this.interviewId);
+      this.voiceSession = null;
+    }
+
+    const fallbackQuestion =
+      this.lastEvaluateResult?.nextQuestion ||
+      this.livePendingQuestion ||
+      (await this.leia.firstQuestion({ job: this.job, candidateName: this.candidate.name, cvText: this.interview.cvText }));
+
+    await this.askQuestion(fallbackQuestion);
+  }
+
   private async generateReports(): Promise<{ report1?: Report; report2?: Report }> {
     const turns = await this.db.listTurns(this.interviewId);
     const evaluations = await this.db.listEvaluations(this.interviewId);
@@ -561,6 +735,7 @@ export class InterviewEngine {
         durationSec,
         language: this.job.requirements.language,
         behavior,
+        cvText: this.interview.cvText,
       });
       report1 = await this.db.createReport({
         id: uuid(),
@@ -591,6 +766,7 @@ export class InterviewEngine {
         candidateName: this.candidate.name,
         evaluations: evalForLeia,
         behavior,
+        cvText: this.interview.cvText,
       });
 
       // Analíticas determinísticas (no las dejamos al criterio del LLM):
@@ -701,7 +877,7 @@ const STOPWORDS = new Set([
   'contame', 'decime', 'podes', 'podrias', 'puedes', 'podria', 'podriamos', 'tenes',
 ]);
 
-function findSimilarQuestion(candidate: string, previous: string[]): string | null {
+export function findSimilarQuestion(candidate: string, previous: string[]): string | null {
   const candTokens = tokenSet(candidate);
   if (candTokens.size === 0) return null;
   for (const prev of previous) {
@@ -736,7 +912,7 @@ function truncate(s: string, max: number): string {
 // que muchas y raras.
 const BANNED_FILLER_PATTERNS = /(\bbuen[ií]simo\b|\bperfecto\b|\bexcelente\b|\bmuy bien\b|\bgenial\b|\bincre[ií]ble\b|\bfant[áa]stico\b|\bbrillante\b|\bqu[ée] bueno\b|\binteresante\b|\bpasemos\b|\bcambi(emos|amos|emos)\b|\botro tema\b|\bsiguiente pregunta\b|\bvamos con\b|\btengo una pregunta\b|\bte quer[ií]a preguntar\b|\buna consulta\b|\bahora te pregunto\b)/i;
 
-function isNeutralFiller(s: string): boolean {
+export function isNeutralFiller(s: string): boolean {
   const t = s.trim();
   if (!t) return false;
   const words = t.split(/\s+/).filter(Boolean).length;
@@ -751,7 +927,7 @@ function isNeutralFiller(s: string): boolean {
  * Separa por `.`, `!`, `?` seguidos de espacio, manteniendo el signo.
  * Si el texto es corto (<= 60 chars) lo devuelve como un único chunk.
  */
-function splitSentences(text: string): string[] {
+export function splitSentences(text: string): string[] {
   if (text.length <= 60) return [text];
   // Usamos un centinela en lugar de lookbehind para compatibilidad máxima
   const parts = text

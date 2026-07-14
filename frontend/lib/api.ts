@@ -64,6 +64,25 @@ export const apiCreateJobFromLink = (data: {
     body: JSON.stringify(data),
   });
 
+export const apiCreateJobFromForm = (data: {
+  title: string;
+  company?: string;
+  description: string;
+  knowledge: string;
+  location?: string;
+  salary?: string;
+  modality?: Job['modality'];
+  vacancies?: number;
+  hiringStatus?: Job['hiringStatus'];
+  publishedAt?: string;
+  language?: string;
+  preferences?: Partial<Job['preferences']>;
+}) =>
+  http<Job>('/api/jobs/from-form', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+
 export const apiDeleteJob = (id: string) =>
   http<void>(`/api/jobs/${id}`, { method: 'DELETE' });
 
@@ -144,6 +163,17 @@ export const apiSimulateAnswer = (id: string, text: string) =>
 
 export const apiDeleteInterview = (id: string) =>
   http<void>(`/api/interviews/${id}`, { method: 'DELETE' });
+
+/** Sube el CV en PDF del candidato (sin auth — llamado desde el lobby de la sala). */
+export const apiUploadCv = async (interviewId: string, file: File): Promise<{ ok: true; extracted: boolean }> => {
+  const res = await fetch(`${API_URL}/api/sala/${interviewId}/cv`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/pdf' },
+    body: file,
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+};
 
 // ---------------- Reports ----------------
 export const apiGetReport = (interviewId: string, kind: ReportKind) =>

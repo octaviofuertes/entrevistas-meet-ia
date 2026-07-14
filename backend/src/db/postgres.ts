@@ -43,8 +43,8 @@ export class PostgresDb implements Database {
 
   async createJob(j: Job) {
     await this.pool.query(
-      `INSERT INTO jobs (id, source_link, title, company, description, requirements, preferences, raw_text, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      `INSERT INTO jobs (id, source_link, title, company, description, requirements, preferences, raw_text, published_at, location, salary, vacancies, modality, hiring_status, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
       [
         j.id,
         j.sourceLink,
@@ -54,6 +54,12 @@ export class PostgresDb implements Database {
         JSON.stringify(j.requirements),
         JSON.stringify(j.preferences),
         j.rawText ?? null,
+        j.publishedAt ?? null,
+        j.location ?? null,
+        j.salary ?? null,
+        j.vacancies ?? null,
+        j.modality ?? null,
+        j.hiringStatus ?? 'abierto',
         j.createdAt,
         j.updatedAt,
       ]
@@ -66,7 +72,7 @@ export class PostgresDb implements Database {
     if (!existing) return null;
     const merged: Job = { ...existing, ...patch, updatedAt: new Date().toISOString() };
     await this.pool.query(
-      `UPDATE jobs SET source_link=$2, title=$3, company=$4, description=$5, requirements=$6, preferences=$7, raw_text=$8, updated_at=$9 WHERE id=$1`,
+      `UPDATE jobs SET source_link=$2, title=$3, company=$4, description=$5, requirements=$6, preferences=$7, raw_text=$8, published_at=$9, location=$10, salary=$11, vacancies=$12, modality=$13, hiring_status=$14, updated_at=$15 WHERE id=$1`,
       [
         merged.id,
         merged.sourceLink,
@@ -76,6 +82,12 @@ export class PostgresDb implements Database {
         JSON.stringify(merged.requirements),
         JSON.stringify(merged.preferences),
         merged.rawText ?? null,
+        merged.publishedAt ?? null,
+        merged.location ?? null,
+        merged.salary ?? null,
+        merged.vacancies ?? null,
+        merged.modality ?? null,
+        merged.hiringStatus ?? 'abierto',
         merged.updatedAt,
       ]
     );
@@ -161,8 +173,8 @@ export class PostgresDb implements Database {
 
   async createInterview(i: Interview) {
     await this.pool.query(
-      `INSERT INTO interviews (id, job_id, candidate_id, status, meet_url, tts_driver, recall_bot_id, scheduled_at, started_at, ended_at, duration_sec, behavioral_analysis, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      `INSERT INTO interviews (id, job_id, candidate_id, status, meet_url, tts_driver, mode, recall_bot_id, scheduled_at, started_at, ended_at, duration_sec, behavioral_analysis, consent_recording, consent_analysis, voice_mode, cv_text, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
       [
         i.id,
         i.jobId,
@@ -170,12 +182,17 @@ export class PostgresDb implements Database {
         i.status,
         i.meetUrl,
         normalizeTtsDriver(i.ttsDriver),
+        i.mode ?? 'meet',
         i.recallBotId ?? null,
         i.scheduledAt ?? null,
         i.startedAt ?? null,
         i.endedAt ?? null,
         i.durationSec ?? null,
         i.behavioralAnalysis ? JSON.stringify(i.behavioralAnalysis) : null,
+        i.consentRecording ?? false,
+        i.consentAnalysis ?? false,
+        i.voiceMode ?? 'pipeline',
+        i.cvText ?? null,
         i.createdAt,
         i.updatedAt,
       ]
@@ -188,7 +205,7 @@ export class PostgresDb implements Database {
     if (!existing) return null;
     const merged: Interview = { ...existing, ...patch, updatedAt: new Date().toISOString() };
     await this.pool.query(
-      `UPDATE interviews SET job_id=$2, candidate_id=$3, status=$4, meet_url=$5, tts_driver=$6, recall_bot_id=$7, scheduled_at=$8, started_at=$9, ended_at=$10, duration_sec=$11, behavioral_analysis=$12, updated_at=$13 WHERE id=$1`,
+      `UPDATE interviews SET job_id=$2, candidate_id=$3, status=$4, meet_url=$5, tts_driver=$6, mode=$7, recall_bot_id=$8, scheduled_at=$9, started_at=$10, ended_at=$11, duration_sec=$12, behavioral_analysis=$13, consent_recording=$14, consent_analysis=$15, voice_mode=$16, cv_text=$17, updated_at=$18 WHERE id=$1`,
       [
         merged.id,
         merged.jobId,
@@ -196,12 +213,17 @@ export class PostgresDb implements Database {
         merged.status,
         merged.meetUrl,
         normalizeTtsDriver(merged.ttsDriver),
+        merged.mode ?? 'meet',
         merged.recallBotId ?? null,
         merged.scheduledAt ?? null,
         merged.startedAt ?? null,
         merged.endedAt ?? null,
         merged.durationSec ?? null,
         merged.behavioralAnalysis ? JSON.stringify(merged.behavioralAnalysis) : null,
+        merged.consentRecording ?? false,
+        merged.consentAnalysis ?? false,
+        merged.voiceMode ?? 'pipeline',
+        merged.cvText ?? null,
         merged.updatedAt,
       ]
     );
@@ -356,6 +378,12 @@ function rowToJob(r: any): Job {
     requirements: r.requirements,
     preferences: r.preferences,
     rawText: r.raw_text,
+    publishedAt: r.published_at?.toISOString() ?? null,
+    location: r.location,
+    salary: r.salary,
+    vacancies: r.vacancies,
+    modality: r.modality,
+    hiringStatus: r.hiring_status,
     createdAt: r.created_at.toISOString(),
     updatedAt: r.updated_at.toISOString(),
   };
@@ -382,12 +410,17 @@ function rowToInterview(r: any): Interview {
     status: r.status,
     meetUrl: r.meet_url,
     ttsDriver: normalizeTtsDriver(r.tts_driver),
+    mode: r.mode ?? 'meet',
     recallBotId: r.recall_bot_id,
     scheduledAt: r.scheduled_at?.toISOString() ?? null,
     startedAt: r.started_at?.toISOString() ?? null,
     endedAt: r.ended_at?.toISOString() ?? null,
     durationSec: r.duration_sec,
     behavioralAnalysis: r.behavioral_analysis ?? null,
+    consentRecording: r.consent_recording ?? false,
+    consentAnalysis: r.consent_analysis ?? false,
+    voiceMode: r.voice_mode ?? 'pipeline',
+    cvText: r.cv_text ?? null,
     createdAt: r.created_at.toISOString(),
     updatedAt: r.updated_at.toISOString(),
   };
@@ -417,8 +450,10 @@ function rowToTranscript(r: any): TranscriptFragment {
     interviewId: r.interview_id,
     speaker: r.speaker,
     text: r.text,
-    startMs: r.start_ms,
-    endMs: r.end_ms,
+    // pg devuelve BIGINT como string por defecto (evita pérdida de precisión);
+    // epoch-ms cabe cómodo en Number.MAX_SAFE_INTEGER, así que convertimos.
+    startMs: Number(r.start_ms),
+    endMs: Number(r.end_ms),
     isFinal: r.is_final,
     receivedAt: r.received_at.toISOString(),
   };

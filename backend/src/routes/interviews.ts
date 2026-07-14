@@ -16,6 +16,7 @@ const CreateInterviewSchema = z
     meetUrl: z.string().optional().default(''),
     scheduledAt: z.string().datetime().optional(),
     ttsDriver: InterviewTtsDriverSchema.optional(),
+    voiceMode: z.enum(['live', 'pipeline']).optional(),
   })
   .refine(
     (d) => d.mode !== 'meet' || (d.meetUrl ?? '').startsWith('https://meet.google.com/'),
@@ -89,6 +90,7 @@ export async function interviewsRoutes(app: FastifyInstance) {
       mode,
       meetUrl: parsed.data.meetUrl ?? '',
       ttsDriver: parsed.data.ttsDriver ?? defaultInterviewTtsDriver(),
+      voiceMode: parsed.data.voiceMode ?? 'pipeline',
       recallBotId: null,
       scheduledAt: parsed.data.scheduledAt ?? now,
       createdAt: now,

@@ -23,6 +23,31 @@ CREATE TABLE IF NOT EXISTS jobs (
 
 CREATE INDEX IF NOT EXISTS idx_jobs_title ON jobs (title);
 
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS published_at  TIMESTAMPTZ;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS location      TEXT;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS salary        TEXT;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS vacancies     INTEGER;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS modality      TEXT;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS hiring_status TEXT NOT NULL DEFAULT 'abierto';
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'chk_jobs_modality'
+    ) THEN
+        ALTER TABLE jobs
+            ADD CONSTRAINT chk_jobs_modality
+            CHECK (modality IS NULL OR modality IN ('presencial','hibrido','remoto'));
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'chk_jobs_hiring_status'
+    ) THEN
+        ALTER TABLE jobs
+            ADD CONSTRAINT chk_jobs_hiring_status
+            CHECK (hiring_status IN ('abierto','pausado','cerrado'));
+    END IF;
+END $$;
+
 -- ----------------------------------------------------------------
 -- Candidates
 -- ----------------------------------------------------------------
@@ -68,6 +93,9 @@ CREATE INDEX IF NOT EXISTS idx_interviews_status ON interviews (status);
 ALTER TABLE interviews
     ADD COLUMN IF NOT EXISTS tts_driver TEXT NOT NULL DEFAULT 'gemini';
 
+ALTER TABLE interviews
+    ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'meet';
+
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -79,7 +107,36 @@ BEGIN
             ADD CONSTRAINT chk_interviews_tts_driver
             CHECK (tts_driver IN ('gemini','edge'));
     END IF;
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'chk_interviews_mode'
+    ) THEN
+        ALTER TABLE interviews
+            ADD CONSTRAINT chk_interviews_mode
+            CHECK (mode IN ('meet','browser'));
+    END IF;
 END $$;
+
+ALTER TABLE interviews ADD COLUMN IF NOT EXISTS consent_recording BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE interviews ADD COLUMN IF NOT EXISTS consent_analysis  BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE interviews ADD COLUMN IF NOT EXISTS voice_mode TEXT NOT NULL DEFAULT 'pipeline';
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'chk_interviews_voice_mode'
+    ) THEN
+        ALTER TABLE interviews
+            ADD CONSTRAINT chk_interviews_voice_mode
+            CHECK (voice_mode IN ('live','pipeline'));
+    END IF;
+END $$;
+
+ALTER TABLE interviews ADD COLUMN IF NOT EXISTS cv_text TEXT;
 
 -- ----------------------------------------------------------------
 -- Interview turns (par pregunta/respuesta)
@@ -106,13 +163,19 @@ CREATE TABLE IF NOT EXISTS transcripts (
     interview_id  UUID NOT NULL REFERENCES interviews(id) ON DELETE CASCADE,
     speaker       TEXT NOT NULL CHECK (speaker IN ('bot','candidate','other')),
     text          TEXT NOT NULL,
-    start_ms      INTEGER NOT NULL,
-    end_ms        INTEGER NOT NULL,
+    start_ms      BIGINT NOT NULL,
+    end_ms        BIGINT NOT NULL,
     is_final      BOOLEAN NOT NULL DEFAULT TRUE,
     received_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_transcripts_interview ON transcripts (interview_id, start_ms);
+
+-- start_ms/end_ms guardan epoch-milliseconds absolutos (Date.now()), que
+-- desbordan INTEGER (~2.1e9) en años recientes. Migración idempotente para
+-- bases ya creadas con el tipo viejo.
+ALTER TABLE transcripts ALTER COLUMN start_ms TYPE BIGINT;
+ALTER TABLE transcripts ALTER COLUMN end_ms TYPE BIGINT;
 
 -- ----------------------------------------------------------------
 -- Evaluations

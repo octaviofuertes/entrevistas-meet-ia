@@ -18,7 +18,8 @@ type SalaMsg =
   | { type: 'question'; text: string; index: number; isClosing?: boolean }
   | { type: 'status'; status: string; reason?: string }
   | { type: 'finished' }
-  | { type: 'report_ready'; kind: number };
+  | { type: 'report_ready'; kind: number }
+  | { type: 'stop_audio' };
 
 class BrowserSalaBus {
   private clients = new Map<string, WebSocket>();

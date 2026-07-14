@@ -20,6 +20,8 @@ export interface EvaluateInput {
   lastAnswer: string;
   turnIndex: number;
   elapsedSec: number;
+  /** Texto plano del CV del candidato, si subió uno (Etapa 1). */
+  cvText?: string | null;
 }
 
 export interface EvaluateOutput {
@@ -38,6 +40,23 @@ export interface EvaluateOutput {
 export interface FirstQuestionInput {
   job: Job;
   candidateName: string;
+  /** Texto plano del CV del candidato, si subió uno (Etapa 1). */
+  cvText?: string | null;
+}
+
+export interface StructureJobInput {
+  title: string;
+  description: string;
+  knowledge: string;
+  language: string;
+}
+
+export interface StructureJobOutput {
+  stack: string[];
+  seniority: Job['requirements']['seniority'];
+  yearsOfExperience: number;
+  responsibilities: string[];
+  niceToHave: string[];
 }
 
 export interface Report1Input {
@@ -47,6 +66,8 @@ export interface Report1Input {
   durationSec: number;
   language: string;
   behavior?: BehavioralAnalysis | null;
+  /** Texto plano del CV del candidato, si subió uno (Etapa 1). */
+  cvText?: string | null;
 }
 
 export interface Report2Input {
@@ -60,6 +81,8 @@ export interface Report2Input {
     flags: string[];
   }>;
   behavior?: BehavioralAnalysis | null;
+  /** Texto plano del CV del candidato, si subió uno (Etapa 1). */
+  cvText?: string | null;
 }
 
 export interface LeiaService {
@@ -74,6 +97,8 @@ export interface LeiaService {
   generateFillers(input: FirstQuestionInput): Promise<string[]>;
   /** Genera el cierre de la entrevista, contextualizado al candidato y puesto. */
   generateClosing(input: FirstQuestionInput): Promise<string>;
+  /** Estructura un puesto cargado por formulario: deduce stack, seniority y responsabilidades. */
+  structureJob(input: StructureJobInput): Promise<StructureJobOutput>;
 }
 
 let instance: LeiaService | null = null;

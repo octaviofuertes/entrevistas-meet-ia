@@ -2,7 +2,7 @@
   "name": "entrevistas-meet-ia",
   "version": "1.0.0",
   "private": true,
-  "description": "Sistema de Entrevistas Automatizadas con Inteligencia Artificial - basado en Google Cloud Vertex AI",
+  "description": "Sistema de Entrevistas Automatizadas con Inteligencia Artificial (leIA)",
   "workspaces": [
     "backend",
     "frontend"

@@ -7,6 +7,8 @@ import type {
   FirstQuestionInput,
   Report1Input,
   Report2Input,
+  StructureJobInput,
+  StructureJobOutput,
 } from './index';
 import type { DimensionScores, Report1Payload, Report2Payload } from '../../types';
 import {
@@ -72,6 +74,43 @@ Devolvé SOLO el texto.`;
     }
   }
 
+  async structureJob(input: StructureJobInput): Promise<StructureJobOutput> {
+    const sys = `Sos leIA. Estructurá este puesto a partir del texto libre que cargó un reclutador.
+Devolvé JSON ESTRICTO con esta forma exacta:
+{"stack":["..."],"seniority":"junior|semi|senior|lead","yearsOfExperience":<entero>,"responsibilities":["..."],"niceToHave":["..."]}
+- "stack": tecnologías concretas mencionadas o claramente implícitas (máx 8).
+- "seniority": una de junior/semi/senior/lead según el texto.
+- "responsibilities": 3 a 5 responsabilidades concretas.
+- "niceToHave": 0 a 5 items, puede ser vacío.
+No agregues texto fuera del JSON.`;
+    try {
+      const text = await this.callClaude({
+        system: sys,
+        user: `Título: ${input.title}\nDescripción: ${input.description}\nConocimientos requeridos: ${input.knowledge}`,
+        maxTokens: 500,
+        temperature: 0.4,
+      });
+      const parsed = JSON.parse(extractJSON(text));
+      const seniority = ['junior', 'semi', 'senior', 'lead'].includes(parsed.seniority)
+        ? parsed.seniority
+        : 'semi';
+      const stack = Array.isArray(parsed.stack) ? parsed.stack.map(String).slice(0, 8) : [];
+      if (stack.length === 0) throw new Error('sin stack detectado');
+      return {
+        stack,
+        seniority,
+        yearsOfExperience: Math.max(0, Math.min(40, Math.round(Number(parsed.yearsOfExperience) || 0))),
+        responsibilities: Array.isArray(parsed.responsibilities)
+          ? parsed.responsibilities.map(String).slice(0, 6)
+          : [],
+        niceToHave: Array.isArray(parsed.niceToHave) ? parsed.niceToHave.map(String).slice(0, 6) : [],
+      };
+    } catch (err) {
+      logger.warn({ err }, 'claude.structureJob: fallback a mock');
+      return this.fallback.structureJob(input);
+    }
+  }
+
   async firstQuestion(input: FirstQuestionInput): Promise<string> {
     const sys = `Sos leIA — entrevistadora virtual con personalidad propia, español rioplatense, voseo.
 Generás la apertura de una entrevista para "${input.job.title}" en "${input.job.company}".
@@ -80,12 +119,17 @@ Reglas:
 - Saludá por el nombre, presentate, mencioná los ${input.job.preferences.durationMinutes} min de duración.
 - Cerrá con UNA pregunta abierta conectada al puesto y al stack.
 - Hablás natural, no acartonada. Variá las aperturas. No uses "espero que estés bien".
-- 3-4 oraciones máximo.
+- 3-4 oraciones máximo.${
+      input.cvText
+        ? '\n- El candidato subió su CV (viene en el mensaje). Tu apertura DEBE referenciar al menos un dato concreto del CV (empresa, tecnología o duración) — natural, sin recitarlo.'
+        : ''
+    }
 Devolvé SOLO el texto a decir.`;
+    const cvSection = input.cvText ? `\nCV del candidato (texto extraído):\n${input.cvText.slice(0, 3000)}` : '';
     try {
       const text = await this.callClaude({
         system: sys,
-        user: `Candidato: ${input.candidateName}`,
+        user: `Candidato: ${input.candidateName}${cvSection}`,
         maxTokens: 220,
         temperature: 0.7,
       });
@@ -107,6 +151,7 @@ Devolvé SOLO el texto a decir.`;
           lastQuestion: input.lastQuestion,
           lastAnswer: input.lastAnswer,
           turnIndex: input.turnIndex,
+          cvText: input.cvText,
         }),
         maxTokens: 450,
         temperature: 0.6,
@@ -136,6 +181,7 @@ Devolvé SOLO el texto a decir.`;
           fullTranscript: input.fullTranscript.map((t) => ({ speaker: t.speaker, text: t.text })),
           durationSec: input.durationSec,
           behavior: input.behavior ?? null,
+          cvText: input.cvText,
         }),
         maxTokens: 1600,
         temperature: 0.3,
@@ -175,6 +221,7 @@ Devolvé SOLO el texto a decir.`;
             flags: e.flags,
           })),
           behavior: input.behavior ?? null,
+          cvText: input.cvText,
         }),
         maxTokens: 1700,
         temperature: 0.3,
