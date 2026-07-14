@@ -132,10 +132,11 @@ export function CandidateVideo({
 
 function AttentionBadge({ metrics }: { metrics: FaceMetrics }) {
   const map: Record<FaceMetrics['attention'], { label: string; cls: string; icon: string }> = {
-    attentive: { label: 'Atento', cls: 'bg-green-500/20 text-green-200 border-green-400/40', icon: '●' },
-    reading: { label: 'Mirando hacia abajo', cls: 'bg-amber-500/25 text-amber-100 border-amber-400/50', icon: '↓' },
-    distracted: { label: 'Mirando al costado', cls: 'bg-amber-500/25 text-amber-100 border-amber-400/50', icon: '↔' },
-    absent: { label: 'Sin cara', cls: 'bg-red-500/25 text-red-100 border-red-400/50', icon: '∅' },
+    attentive:  { label: 'Atento',              cls: 'bg-green-500/20 text-green-200 border-green-400/40',  icon: '●' },
+    reading:    { label: 'Mirando hacia abajo', cls: 'bg-amber-500/25 text-amber-100 border-amber-400/50', icon: '↓' },
+    distracted: { label: 'Mirando al costado',  cls: 'bg-amber-500/25 text-amber-100 border-amber-400/50', icon: '↔' },
+    absent:     { label: 'Sin cara',            cls: 'bg-red-500/25 text-red-100 border-red-400/50',       icon: '∅' },
+    sleepy:     { label: 'Somnoliento',         cls: 'bg-blue-500/20 text-blue-200 border-blue-400/40',    icon: '~' },
   };
   const s = map[metrics.attention];
   return (

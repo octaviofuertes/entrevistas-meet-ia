@@ -202,6 +202,33 @@ export default function EntrevistaDetallePage() {
             </div>
           )}
 
+          {/* Grabación de la entrevista */}
+          {isBrowser && data.status !== 'agendada' && (
+            <div className="card">
+              <h2 className="text-lg font-semibold mb-1">Grabación</h2>
+              <p className="text-xs text-slate-500 mb-3">
+                Video compuesto: leIA + candidato (con audio)
+              </p>
+              <video
+                controls
+                preload="metadata"
+                className="w-full rounded-lg bg-black"
+                style={{ maxHeight: 480 }}
+                src={`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'}/api/sala/${data.id}/recording`}
+                onError={e => {
+                  const vid = e.currentTarget as HTMLVideoElement;
+                  vid.style.display = 'none';
+                  vid.nextElementSibling?.classList.remove('hidden');
+                }}
+              />
+              <p className="hidden text-sm text-slate-500 mt-2">
+                {data.status === 'en_curso'
+                  ? 'Grabando… la grabación estará disponible al finalizar.'
+                  : 'La grabación se sube automáticamente al terminar la sala. Si ya terminó, actualizá la página.'}
+              </p>
+            </div>
+          )}
+
           <div className="card">
             <h2 className="text-lg font-semibold mb-3">Turnos pregunta/respuesta</h2>
             {data.turns.length === 0 ? (

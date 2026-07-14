@@ -21,12 +21,15 @@ import { detectStack, detectSeniority, defaultYears } from '../jobs/fromLink';
  */
 export class MockLeia implements LeiaService {
   async generateFillers(_input: FirstQuestionInput): Promise<string[]> {
-    // Mínimo de respaldo cuando no hay IA disponible.
     return [
-      'Un segundo.',
-      'Dejame pensar.',
-      'Ajá, dame un momento.',
-      'Mhm, anotando eso.',
+      'Sí, sí...',
+      'Mmm, a ver.',
+      'Claro, claro.',
+      'Dale, dale.',
+      'Ah, ya veo.',
+      'Mm, bueno.',
+      'Sí, entiendo.',
+      'A ver, a ver.',
     ];
   }
 

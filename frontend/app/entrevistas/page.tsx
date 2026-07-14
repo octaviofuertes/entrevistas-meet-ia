@@ -12,6 +12,8 @@ import {
 } from '@/lib/api';
 import type { Interview, Candidate, Job } from '@/lib/types';
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+
 export default function EntrevistasPage() {
   const [interviews, setInterviews] = useState<Interview[]>([]);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
@@ -68,8 +70,8 @@ export default function EntrevistasPage() {
                 <th className="text-left py-2">Candidato</th>
                 <th className="text-left py-2">Puesto</th>
                 <th className="text-left py-2">Estado</th>
-                <th className="text-left py-2">Meet</th>
                 <th className="text-left py-2">Creada</th>
+                <th className="text-left py-2">Grabación</th>
                 <th></th>
               </tr>
             </thead>
@@ -82,18 +84,23 @@ export default function EntrevistasPage() {
                     <td className="py-3 font-medium">{cand?.name ?? '—'}</td>
                     <td className="py-3 text-slate-700">{job?.title ?? '—'}</td>
                     <td className="py-3"><StatusBadge status={iv.status} /></td>
-                    <td className="py-3 font-mono text-xs">
-                      <a
-                        href={iv.meetUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-primary-600 hover:underline"
-                      >
-                        {iv.meetUrl.replace('https://meet.google.com/', '')}
-                      </a>
-                    </td>
                     <td className="py-3 text-slate-500">
                       {new Date(iv.createdAt).toLocaleDateString('es-AR')}
+                    </td>
+                    <td className="py-2">
+                      {iv.mode === 'browser' && iv.status === 'en_curso' ? (
+                        <span className="text-xs text-slate-400">Grabando...</span>
+                      ) : iv.mode === 'browser' ? (
+                        <video
+                          src={`${API_URL}/api/sala/${iv.id}/recording`}
+                          controls
+                          preload="metadata"
+                          onError={e => { (e.currentTarget as HTMLVideoElement).style.display = 'none'; }}
+                          style={{ width: 160, height: 90, borderRadius: 6, background: '#000', display: 'block' }}
+                        />
+                      ) : (
+                        <span className="text-slate-300">—</span>
+                      )}
                     </td>
                     <td className="py-3 text-right whitespace-nowrap">
                       <Link
@@ -102,7 +109,7 @@ export default function EntrevistasPage() {
                       >
                         Detalle
                       </Link>
-                      {iv.status === 'en_curso' && iv.meetUrl && (
+                      {iv.status === 'en_curso' && iv.meetUrl && iv.mode !== 'browser' && (
                         <a
                           href={iv.meetUrl}
                           target="_blank"

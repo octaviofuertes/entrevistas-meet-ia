@@ -2,213 +2,301 @@
 
 import { useEffect, useRef, useState } from 'react';
 
+// ─── Public interface ────────────────────────────────────────────────────────
+
 export interface FaceMetrics {
   ready: boolean;
   faceDetected: boolean;
-  expression: 'neutral' | 'happy' | 'sad' | 'angry' | 'surprised' | 'fearful' | 'disgusted' | null;
+  // Head pose in actual degrees (from MediaPipe 4×4 transformation matrix)
+  headPitch: number;      // + = looking up,   − = looking down
+  headYaw:   number;      // + = turned right, − = turned left
+  // Eye gaze (MediaPipe blendshape scores, 0–1 each)
+  gazeDown:  number;      // iris looking down
+  gazeUp:    number;      // iris looking up
+  gazeLeft:  number;      // iris looking left
+  gazeRight: number;      // iris looking right
+  // Eye state
+  eyeOpenness: number;    // 1 = fully open, 0 = closed
+  blinking:    boolean;
+  // Expression (from blendshapes)
+  expression:      string | null;
   expressionLabel: string;
-  /** Aproximación de yaw/pitch desde landmarks. */
-  headPitch: number; // negativo = mira hacia abajo
-  headYaw: number; // negativo = mira a la izquierda
-  /** Heurística "está leyendo": mirada hacia abajo prolongada o cara descentrada. */
+  // Composite attention (temporally smoothed)
+  attention:       'attentive' | 'reading' | 'distracted' | 'absent' | 'sleepy';
   isLikelyReading: boolean;
-  /** Presencia: fracción de los últimos N frames con cara detectada. */
-  presenceRatio: number;
-  /** Estado agregado. */
-  attention: 'attentive' | 'reading' | 'absent' | 'distracted';
-  /** Errores de carga del modelo. */
-  error: string | null;
+  presenceRatio:   number;
+  error:           string | null;
 }
 
-const MODELS_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/model';
-const SCRIPT_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/dist/face-api.js';
-const SAMPLING_MS = 700;
-const HISTORY_LEN = 8;
+// ─── MediaPipe constants ─────────────────────────────────────────────────────
 
-declare global {
-  interface Window {
-    faceapi?: any;
-  }
+// All three URLs come from CDN so webpack never has to bundle the wasm/esm.
+// The /* webpackIgnore: true */ comment on the import() call tells Next.js to leave
+// the dynamic import as-is and let the browser resolve it natively.
+const VISION_CDN = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
+const WASM_CDN   = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
+const MODEL_CDN  = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+
+// History sizes
+const PRES_LEN = 12;   // presence window (~800ms at 60fps)
+const ATTN_LEN = 8;    // attention smoothing window
+
+// ─── Singleton landmarker (shared across hook instances) ─────────────────────
+
+let _landmarker: any     = null;
+let _loadPromise: Promise<any> | null = null;
+
+async function getLandmarker(): Promise<any> {
+  if (_landmarker)    return _landmarker;
+  if (_loadPromise)   return _loadPromise;
+  _loadPromise = (async () => {
+    // webpackIgnore: Next.js won't try to bundle this URL — the browser loads
+    // the ES module from CDN natively, avoiding the vision_bundle.mjs ENOENT.
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore — dynamic CDN URL, no local type resolution
+    const { FaceLandmarker, FilesetResolver } = await import(
+      /* webpackIgnore: true */ VISION_CDN
+    );
+    const fs = await FilesetResolver.forVisionTasks(WASM_CDN);
+    _landmarker = await FaceLandmarker.createFromOptions(fs, {
+      baseOptions: {
+        modelAssetPath: MODEL_CDN,
+        delegate: 'GPU',     // auto-falls back to CPU if WebGL unavailable
+      },
+      outputFaceBlendshapes:             true,
+      outputFacialTransformationMatrixes: true,
+      runningMode: 'VIDEO',
+      numFaces: 1,
+    });
+    return _landmarker;
+  })();
+  return _loadPromise;
 }
 
-let loadingPromise: Promise<any> | null = null;
+// ─── Math helpers ────────────────────────────────────────────────────────────
 
-function loadFaceApi(): Promise<any> {
-  if (typeof window === 'undefined') return Promise.reject(new Error('SSR'));
-  if (window.faceapi) return Promise.resolve(window.faceapi);
-  if (loadingPromise) return loadingPromise;
-
-  loadingPromise = new Promise((resolve, reject) => {
-    // Por si otro hook ya inyectó el script.
-    const existing = document.querySelector(`script[src="${SCRIPT_URL}"]`);
-    if (existing) {
-      if (window.faceapi) return resolve(window.faceapi);
-      existing.addEventListener('load', () => resolve(window.faceapi));
-      existing.addEventListener('error', () => reject(new Error('face-api script error')));
-      return;
-    }
-    const s = document.createElement('script');
-    s.src = SCRIPT_URL;
-    s.async = true;
-    s.crossOrigin = 'anonymous';
-    s.onload = () => resolve(window.faceapi);
-    s.onerror = () => reject(new Error('No se pudo cargar face-api.js'));
-    document.head.appendChild(s);
-  });
-  return loadingPromise;
+/**
+ * Extract pitch and yaw (in degrees) from MediaPipe's 4×4 row-major
+ * facial transformation matrix.  The matrix maps face-model space → camera
+ * space, so we read the forward-vector column for yaw and the up-vector for
+ * pitch using the standard ZYX Euler decomposition.
+ */
+function matrixToEuler(d: Float32Array | number[]): { pitch: number; yaw: number } {
+  // Row-major indexing: element at row r, col c → d[r*4 + c]
+  const r21 = d[9];
+  const r22 = d[10];
+  const r20 = d[8];
+  const pitch = Math.atan2(r21, r22)  * (180 / Math.PI);
+  const yaw   = Math.atan2(-r20, Math.sqrt(r21 * r21 + r22 * r22)) * (180 / Math.PI);
+  return { pitch, yaw };
 }
 
-let modelsLoaded = false;
-async function ensureModels(faceapi: any): Promise<void> {
-  if (modelsLoaded) return;
-  await faceapi.nets.tinyFaceDetector.loadFromUri(MODELS_URL);
-  await faceapi.nets.faceLandmark68Net.loadFromUri(MODELS_URL);
-  await faceapi.nets.faceExpressionNet.loadFromUri(MODELS_URL);
-  modelsLoaded = true;
+/** Look up a blendshape score by category name. */
+function bs(categories: any[], name: string): number {
+  return categories.find((c: any) => c.categoryName === name)?.score ?? 0;
 }
 
-const EXPR_LABELS: Record<string, string> = {
-  neutral: 'Neutral',
-  happy: 'Sonriendo',
-  sad: 'Triste',
-  angry: 'Enojado',
-  surprised: 'Sorprendido',
-  fearful: 'Tenso',
-  disgusted: 'Disgustado',
+// ─── Expression classification ───────────────────────────────────────────────
+
+type ExprResult = { name: string; label: string };
+
+function classifyExpression(cats: any[]): ExprResult {
+  const smileL = bs(cats, 'mouthSmileLeft');
+  const smileR = bs(cats, 'mouthSmileRight');
+  const browUp = bs(cats, 'browInnerUp');
+  const jawOpn = bs(cats, 'jawOpen');
+  const browDL = bs(cats, 'browDownLeft');
+  const browDR = bs(cats, 'browDownRight');
+  const cheekS = bs(cats, 'cheekSquintLeft') + bs(cats, 'cheekSquintRight');
+
+  const smile     = (smileL + smileR) / 2;
+  const surprised = (browUp * 0.6 + jawOpn * 0.4);
+  const tense     = (browDL + browDR) / 2;
+  const focused   = Math.min(1, cheekS * 0.6 + tense * 0.3);
+
+  if (smile > 0.32)         return { name: 'happy',     label: 'Sonriendo' };
+  if (surprised > 0.35)     return { name: 'surprised', label: 'Sorprendido' };
+  if (focused  > 0.28)      return { name: 'focused',   label: 'Concentrado' };
+  if (tense    > 0.22)      return { name: 'tense',     label: 'Tenso' };
+  return                           { name: 'neutral',   label: 'Neutral' };
+}
+
+// ─── Default state ────────────────────────────────────────────────────────────
+
+const DEFAULTS: FaceMetrics = {
+  ready: false, faceDetected: false,
+  headPitch: 0, headYaw: 0,
+  gazeDown: 0, gazeUp: 0, gazeLeft: 0, gazeRight: 0,
+  eyeOpenness: 1, blinking: false,
+  expression: null, expressionLabel: '—',
+  attention: 'attentive', isLikelyReading: false, presenceRatio: 1,
+  error: null,
 };
+
+// ─── Hook ────────────────────────────────────────────────────────────────────
 
 export function useFaceAnalysis(
   videoRef: React.RefObject<HTMLVideoElement>,
-  enabled: boolean
+  enabled: boolean,
 ): FaceMetrics {
-  const [metrics, setMetrics] = useState<FaceMetrics>({
-    ready: false,
-    faceDetected: false,
-    expression: null,
-    expressionLabel: '—',
-    headPitch: 0,
-    headYaw: 0,
-    isLikelyReading: false,
-    presenceRatio: 1,
-    attention: 'attentive',
-    error: null,
-  });
+  const [metrics, setMetrics] = useState<FaceMetrics>(DEFAULTS);
 
-  const historyRef = useRef<{ detected: boolean; pitch: number; yaw: number }[]>([]);
+  const rafRef    = useRef(0);
+  const presHist  = useRef<boolean[]>([]);
+  const attnHist  = useRef<string[]>([]);
+  const lastTs    = useRef(-1);
+  const lastSetTs = useRef(0);   // throttle React re-renders to ~15 fps
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) {
+      setMetrics(DEFAULTS);
+      return;
+    }
     let alive = true;
-    let interval: ReturnType<typeof setInterval> | null = null;
-    let faceapi: any = null;
 
-    (async () => {
-      try {
-        faceapi = await loadFaceApi();
-        await ensureModels(faceapi);
+    getLandmarker()
+      .then((fl) => {
         if (!alive) return;
         setMetrics((m) => ({ ...m, ready: true, error: null }));
 
-        const detectorOpts = new faceapi.TinyFaceDetectorOptions({
-          inputSize: 224,
-          scoreThreshold: 0.5,
-        });
+        const loop = () => {
+          if (!alive) return;
+          rafRef.current = requestAnimationFrame(loop);
 
-        interval = setInterval(async () => {
           const video = videoRef.current;
-          if (!alive || !video || video.readyState < 2 || video.paused || video.ended) return;
+          if (!video || video.readyState < 2 || video.paused || video.ended) return;
+
+          const now = performance.now();
+          if (now <= lastTs.current) return;   // MediaPipe requires monotonically increasing timestamps
+          lastTs.current = now;
+
           try {
-            const detection = await faceapi
-              .detectSingleFace(video, detectorOpts)
-              .withFaceLandmarks()
-              .withFaceExpressions();
+            const res = fl.detectForVideo(video, now);
+            const pH  = presHist.current;
 
-            let pitch = 0;
-            let yaw = 0;
-            let detected = false;
-            let expression: FaceMetrics['expression'] = null;
+            // ── No face detected ────────────────────────────────────────────
+            if (!res.faceLandmarks?.length) {
+              pH.push(false);
+              if (pH.length > PRES_LEN) pH.shift();
+              const pres = pH.filter(Boolean).length / Math.max(pH.length, 1);
 
-            if (detection) {
-              detected = true;
-              const landmarks = detection.landmarks;
-              const positions = landmarks.positions as Array<{ x: number; y: number }>;
-              // Heurística simple: pitch ~ relación ojos-nariz en eje Y;
-              // yaw ~ asimetría horizontal de los ojos respecto a la nariz.
-              const leftEye = avgPoint(positions.slice(36, 42));
-              const rightEye = avgPoint(positions.slice(42, 48));
-              const nose = positions[30];
-              const chin = positions[8];
-              const eyeMid = { x: (leftEye.x + rightEye.x) / 2, y: (leftEye.y + rightEye.y) / 2 };
-              const eyeChinDist = chin.y - eyeMid.y;
-              // pitch normalizado: si la nariz queda muy abajo respecto al eje ojos→mentón, mira abajo.
-              pitch = eyeChinDist > 0 ? -(nose.y - eyeMid.y) / eyeChinDist + 0.5 : 0;
-              // yaw: distancia horizontal de la nariz a la mitad de los ojos.
-              const eyeDist = Math.max(1, rightEye.x - leftEye.x);
-              yaw = (nose.x - eyeMid.x) / eyeDist;
-
-              const exps = detection.expressions as Record<string, number>;
-              expression = (Object.entries(exps).sort(
-                (a, b) => b[1] - a[1]
-              )[0]?.[0] ?? 'neutral') as FaceMetrics['expression'];
+              if (now - lastSetTs.current > 150) {
+                lastSetTs.current = now;
+                setMetrics((m) => ({
+                  ...m,
+                  faceDetected: false,
+                  presenceRatio: Math.round(pres * 100) / 100,
+                  attention: pres < 0.35 ? 'absent' : m.attention,
+                }));
+              }
+              return;
             }
 
-            const h = historyRef.current;
-            h.push({ detected, pitch, yaw });
-            if (h.length > HISTORY_LEN) h.shift();
+            // ── Face detected ───────────────────────────────────────────────
+            pH.push(true);
+            if (pH.length > PRES_LEN) pH.shift();
+            const pres = pH.filter(Boolean).length / Math.max(pH.length, 1);
 
-            const presence = h.filter((x) => x.detected).length / Math.max(1, h.length);
-            const lookingDownStreak = h.slice(-4).every((x) => x.detected && x.pitch < -0.2);
-            const lookingAwayStreak = h.slice(-4).every((x) => x.detected && Math.abs(x.yaw) > 0.35);
-            const isLikelyReading = lookingDownStreak;
+            // Head pose from 4×4 transformation matrix
+            let pitch = 0, yaw = 0;
+            const mtx = res.facialTransformationMatrixes?.[0]?.data;
+            if (mtx) ({ pitch, yaw } = matrixToEuler(mtx));
 
-            let attention: FaceMetrics['attention'] = 'attentive';
-            if (presence < 0.3) attention = 'absent';
-            else if (isLikelyReading) attention = 'reading';
-            else if (lookingAwayStreak) attention = 'distracted';
+            // Blendshapes — iris gaze + eye openness
+            const cats = res.faceBlendshapes?.[0]?.categories ?? [];
 
-            if (alive) {
-              setMetrics({
-                ready: true,
-                faceDetected: detected,
-                expression,
-                expressionLabel: expression ? EXPR_LABELS[expression] ?? expression : '—',
-                headPitch: round2(pitch),
-                headYaw: round2(yaw),
-                isLikelyReading,
-                presenceRatio: round2(presence),
-                attention,
-                error: null,
-              });
+            const blinkL  = bs(cats, 'eyeBlinkLeft');
+            const blinkR  = bs(cats, 'eyeBlinkRight');
+            const dnL     = bs(cats, 'eyeLookDownLeft');
+            const dnR     = bs(cats, 'eyeLookDownRight');
+            const upL     = bs(cats, 'eyeLookUpLeft');
+            const upR     = bs(cats, 'eyeLookUpRight');
+            // Lateral: left eye outward = looking left; right eye outward = looking right
+            const outL    = bs(cats, 'eyeLookOutLeft');
+            const inR     = bs(cats, 'eyeLookInRight');
+            const inL     = bs(cats, 'eyeLookInLeft');
+            const outR    = bs(cats, 'eyeLookOutRight');
+
+            const gazeDown    = (dnL + dnR) / 2;
+            const gazeUp      = (upL + upR) / 2;
+            const gazeLeft    = (outL + inR) / 2;   // both irises shift left
+            const gazeRight   = (inL + outR) / 2;   // both irises shift right
+            const eyeOpenness = 1 - (blinkL + blinkR) / 2;
+            const blinking    = blinkL > 0.65 && blinkR > 0.65;
+
+            // Expression
+            const expr = classifyExpression(cats);
+
+            // ── Attention classification (raw frame) ───────────────────────
+            let raw: FaceMetrics['attention'] = 'attentive';
+
+            if (pres < 0.35) {
+              raw = 'absent';
+            } else if (eyeOpenness < 0.28 && pres > 0.6) {
+              // Eyes nearly closed with face reliably detected → drowsy
+              raw = 'sleepy';
+            } else if (pitch < -9 && gazeDown > 0.20) {
+              // Head pitched down AND iris looking down → reading
+              raw = 'reading';
+            } else if (gazeDown > 0.45) {
+              // Iris strongly down even without head tilt → reading notes below camera
+              raw = 'reading';
+            } else if (Math.abs(yaw) > 22 || gazeLeft > 0.42 || gazeRight > 0.42) {
+              // Head turned or iris looking sideways → distracted
+              raw = 'distracted';
             }
+
+            // Smooth with majority vote over ATTN_LEN frames
+            const aH = attnHist.current;
+            aH.push(raw);
+            if (aH.length > ATTN_LEN) aH.shift();
+            const counts = aH.reduce(
+              (acc, v) => { acc[v] = (acc[v] ?? 0) + 1; return acc; },
+              {} as Record<string, number>,
+            );
+            const attn = Object.entries(counts)
+              .sort((a, b) => b[1] - a[1])[0][0] as FaceMetrics['attention'];
+
+            // Throttle React state updates to ~15 fps to avoid thrashing renders
+            if (now - lastSetTs.current < 66) return;
+            lastSetTs.current = now;
+
+            setMetrics({
+              ready: true,
+              faceDetected: true,
+              headPitch: Math.round(pitch * 10) / 10,
+              headYaw:   Math.round(yaw   * 10) / 10,
+              gazeDown:  Math.round(gazeDown  * 100) / 100,
+              gazeUp:    Math.round(gazeUp    * 100) / 100,
+              gazeLeft:  Math.round(gazeLeft  * 100) / 100,
+              gazeRight: Math.round(gazeRight * 100) / 100,
+              eyeOpenness: Math.round(eyeOpenness * 100) / 100,
+              blinking,
+              expression:      expr.name,
+              expressionLabel: expr.label,
+              attention:       attn,
+              isLikelyReading: attn === 'reading',
+              presenceRatio:   Math.round(pres * 100) / 100,
+              error: null,
+            });
           } catch {
-            // ignorar errores ocasionales del detector
+            // Silently skip single-frame errors (video seek, resize, etc.)
           }
-        }, SAMPLING_MS);
-      } catch (err: any) {
-        if (alive)
-          setMetrics((m) => ({ ...m, error: err?.message ?? 'face-api error' }));
-      }
-    })();
+        };
+
+        rafRef.current = requestAnimationFrame(loop);
+      })
+      .catch((err) => {
+        if (alive) {
+          setMetrics((m) => ({ ...m, ready: false, error: err?.message ?? 'MediaPipe error' }));
+        }
+      });
 
     return () => {
       alive = false;
-      if (interval) clearInterval(interval);
+      cancelAnimationFrame(rafRef.current);
     };
   }, [videoRef, enabled]);
 
   return metrics;
-}
-
-function avgPoint(pts: Array<{ x: number; y: number }>) {
-  let x = 0;
-  let y = 0;
-  for (const p of pts) {
-    x += p.x;
-    y += p.y;
-  }
-  return { x: x / pts.length, y: y / pts.length };
-}
-
-function round2(n: number) {
-  return Math.round(n * 100) / 100;
 }

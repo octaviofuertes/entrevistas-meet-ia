@@ -21,6 +21,10 @@ const ConfigSchema = z.object({
   DATABASE_DRIVER: z.enum(['memory', 'postgres']).default('memory'),
   DATABASE_URL: z.string().default('postgresql://entrevistas:entrevistas@localhost:5432/entrevistas'),
 
+  // MongoDB: usado para almacenar grabaciones de entrevistas (GridFS).
+  // Si está vacío, las grabaciones se guardan en ./recordings/ (fallback local).
+  MONGODB_URL: z.string().optional().default(''),
+
   // leIA - IA propia del sistema. Drivers:
   //   mock   = heurística determinista (default, sin costo)
   //   claude = Anthropic Claude

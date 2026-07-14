@@ -42,6 +42,19 @@ async function buildServer() {
   await app.register(sensible);
   await app.register(websocket, { options: { maxPayload: 10 * 1024 * 1024 } });
 
+  // Grabaciones de video: Overload 1 (sin parseAs) — payload es el IncomingMessage
+  // crudo, sin bufferizar. Ideal para videos que pueden superar los 100 MB.
+  app.addContentTypeParser(
+    /^video\/.*/,
+    {},
+    (_req, body, done) => done(null, body),
+  );
+  app.addContentTypeParser(
+    'application/octet-stream',
+    {},
+    (_req, body, done) => done(null, body),
+  );
+
   // Acepta POST con Content-Type application/json pero body vacío
   app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
     const text = typeof body === 'string' ? body.trim() : '';

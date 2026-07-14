@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS interviews (
     ended_at              TIMESTAMPTZ,
     duration_sec          INTEGER,
     behavioral_analysis   JSONB,
+    recording_id          TEXT,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -224,3 +225,6 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_logs (entity, entity_id);
+
+-- Migración: columna de grabación (idempotente, segura de re-ejecutar)
+ALTER TABLE interviews ADD COLUMN IF NOT EXISTS recording_id TEXT;

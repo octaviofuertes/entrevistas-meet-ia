@@ -243,6 +243,13 @@ export class InterviewEngine {
     await this.recall.simulateCandidateAnswer(this.interviewId, text);
   }
 
+  /** Reconexión: reenvía la pregunta actual al frontend para restaurar subtítulos. */
+  rebroadcastCurrentQuestion() {
+    if (this.interview?.mode !== 'browser' || !this.currentQuestion || this.finished) return;
+    const br = getBrowserRecall(this.interviewId);
+    br.forwardQuestion(this.currentQuestion, this.turnIndex);
+  }
+
   async stop(reason: 'manual' | 'auto' = 'manual'): Promise<{ report1?: Report; report2?: Report }> {
     if (this.finished) {
       const r1 = await this.db.getReport(this.interviewId, 1);
@@ -327,38 +334,39 @@ export class InterviewEngine {
 
     if (opts?.skipBotPlayback || !this.botId) return;
 
-    // Sentence streaming: TTS oración por oración, la primera empieza a sonar
-    // ~1s después de que leIA genera el texto en vez de esperar TTS del texto completo.
-    // playAudio() con output_audio es fire-and-forget → mientras Recall reproduce
-    // la oración N, ya estamos sintetizando la N+1 (pipeline natural).
+    // Síntesis paralela: todas las oraciones se sintetizan a la vez, se envían en orden.
+    // Antes era secuencial (sintetizar N → enviar → sintetizar N+1 → ...) lo que causaba
+    // pausas audibles entre frases porque el frontend terminaba frase N antes de recibir N+1.
+    // Ahora: frase 1 y 2 sintetizan en paralelo (~1s), llegan al frontend casi juntas,
+    // y se reproducen de corrido sin hueco.
     const sentences = splitSentences(text);
+    // Arrancar todas las síntesis al mismo tiempo
+    const audioPromises = sentences.map((s) =>
+      this.tts
+        .synthesize(s)
+        .catch((err): TTSResult | null => {
+          logger.warn({ err }, 'TTS chunk falló, saltando oración');
+          return null;
+        })
+    );
+
     let totalDuration = 0;
-    let firstSentAt = 0; // cuándo se envió el primer chunk de audio
-    for (let i = 0; i < sentences.length; i++) {
+    let firstSentAt = 0;
+    for (let i = 0; i < audioPromises.length; i++) {
       if (this.finished) break;
-      let audio: TTSResult | null = null;
-      try {
-        audio = await this.tts.synthesize(sentences[i]);
-      } catch (err) {
-        logger.warn({ err, chunk: i }, 'TTS chunk falló, saltando oración');
-        continue;
-      }
-      if (!audio || this.finished) break;
+      const audio = await audioPromises[i]; // espera en ORDEN
+      if (!audio) continue;
       totalDuration += audio.durationMs;
       await this.recall.playAudio({
         interviewId: this.interviewId,
-        botId: this.botId,
+        botId: this.botId!,
         audioBase64: audio.audioBase64,
         mimeType: audio.mimeType,
         text: sentences[i],
       });
-      // Marcar cuándo el primer chunk fue enviado (el audio empieza a sonar desde aquí)
       if (firstSentAt === 0) firstSentAt = Date.now();
     }
     if (totalDuration > 0) {
-      // Calcular la ventana de silencio desde el primer envío, no desde el último.
-      // Sin esto hay una "ventana muerta" de varios segundos post-audio donde los
-      // transcripts del candidato se ignoran por isBotSpeaking().
       this.markBotSpeaking(totalDuration, firstSentAt || undefined);
       this.emit('audio_generated', { text, mimeType: 'audio/mpeg', durationMs: totalDuration, bytes: 0 });
     }
@@ -910,14 +918,14 @@ function truncate(s: string, max: number): string {
 // Backstop: si el modelo genera una "muletilla" larga o evaluativa o de
 // transición, la descartamos antes de pre-sintetizar. Mejor pocas y buenas
 // que muchas y raras.
-const BANNED_FILLER_PATTERNS = /(\bbuen[ií]simo\b|\bperfecto\b|\bexcelente\b|\bmuy bien\b|\bgenial\b|\bincre[ií]ble\b|\bfant[áa]stico\b|\bbrillante\b|\bqu[ée] bueno\b|\binteresante\b|\bpasemos\b|\bcambi(emos|amos|emos)\b|\botro tema\b|\bsiguiente pregunta\b|\bvamos con\b|\btengo una pregunta\b|\bte quer[ií]a preguntar\b|\buna consulta\b|\bahora te pregunto\b)/i;
+const BANNED_FILLER_PATTERNS = /(\bbuen[ií]simo\b|\bperfecto\b|\bexcelente\b|\bmuy bien\b|\bgenial\b|\bincre[ií]ble\b|\bfant[áa]stico\b|\bbrillante\b|\bqu[ée] bueno\b|\bpasemos\b|\bcambi(emos|amos|emos)\b|\botro tema\b|\bsiguiente pregunta\b|\bvamos con\b|\btengo una pregunta\b|\bte quer[ií]a preguntar\b|\buna consulta\b|\bahora te pregunto\b|\bentiendo\b|\banotad[ao]\b|\banotando\b|\bde acuerdo\b|\bpor supuesto\b|\bte sigo\b)/i;
 
 export function isNeutralFiller(s: string): boolean {
   const t = s.trim();
   if (!t) return false;
   const words = t.split(/\s+/).filter(Boolean).length;
-  if (words === 0 || words > 5) return false;
-  if (t.length > 40) return false;
+  if (words === 0 || words > 6) return false;
+  if (t.length > 50) return false;
   if (BANNED_FILLER_PATTERNS.test(t)) return false;
   return true;
 }
@@ -926,14 +934,28 @@ export function isNeutralFiller(s: string): boolean {
  * Divide el texto en oraciones para sentence-streaming TTS.
  * Separa por `.`, `!`, `?` seguidos de espacio, manteniendo el signo.
  * Si el texto es corto (<= 60 chars) lo devuelve como un único chunk.
+ *
+ * Fusiona oraciones muy cortas (< 5 palabras) con la siguiente para evitar
+ * gaps audibles: "¡Hola Juan!" dura 0.3s en TTS y el siguiente chunk tarda
+ * ~1s en sintetizarse, creando un silencio perceptible.
  */
 export function splitSentences(text: string): string[] {
   if (text.length <= 60) return [text];
-  // Usamos un centinela en lugar de lookbehind para compatibilidad máxima
-  const parts = text
+  const raw = text
     .replace(/([.!?])\s+/g, '$1\x1E')
     .split('\x1E')
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
-  return parts.length > 0 ? parts : [text];
+
+  // Fusionar oraciones muy cortas con la siguiente
+  const merged: string[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const words = raw[i].split(/\s+/).filter(Boolean).length;
+    if (words < 5 && i < raw.length - 1) {
+      raw[i + 1] = raw[i] + ' ' + raw[i + 1];
+    } else {
+      merged.push(raw[i]);
+    }
+  }
+  return merged.length > 0 ? merged : [text];
 }
