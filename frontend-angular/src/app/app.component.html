@@ -1,0 +1,38 @@
+<ng-container *ngIf="isSala; else withLayout">
+  <router-outlet></router-outlet>
+</ng-container>
+
+<ng-template #withLayout>
+  <div class="min-h-screen flex">
+    <aside class="w-60 bg-white border-r border-slate-200 flex flex-col shrink-0">
+      <div class="px-6 py-5 border-b border-slate-200">
+        <div class="text-xs uppercase tracking-wider text-slate-500 mb-1">leIA</div>
+        <div class="font-bold text-slate-900 leading-tight">Entrevistas Meet</div>
+        <div class="text-xs text-slate-500 mt-1">v2.0 · leIA + Recall.ai</div>
+      </div>
+      <nav class="flex-1 px-3 py-4 space-y-1">
+        <a
+          *ngFor="let item of nav"
+          [routerLink]="item.href"
+          [class]="isActive(item.href)
+            ? 'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors bg-primary-50 text-primary-700'
+            : 'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors text-slate-700 hover:bg-slate-100'"
+        >
+          <span class="w-6 h-6 rounded bg-slate-100 text-slate-700 grid place-items-center text-xs font-bold">
+            {{ item.icon }}
+          </span>
+          {{ item.label }}
+        </a>
+      </nav>
+      <div class="px-6 py-4 border-t border-slate-200 text-xs text-slate-500">
+        Sistema de Entrevistas v2.0<br>
+        Captions nativos de Meet · leIA
+      </div>
+    </aside>
+    <main class="flex-1 overflow-y-auto">
+      <div class="max-w-7xl mx-auto px-8 py-8">
+        <router-outlet></router-outlet>
+      </div>
+    </main>
+  </div>
+</ng-template>

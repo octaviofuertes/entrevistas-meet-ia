@@ -1,0 +1,129 @@
+<p *ngIf="loading" class="text-slate-500">Cargando…</p>
+<p *ngIf="error && !loading" class="text-red-600">{{ error }}</p>
+
+<ng-container *ngIf="!loading && job">
+  <header class="mb-8">
+    <a routerLink="/puestos" class="text-sm text-primary-600 hover:underline">← Puestos</a>
+    <h1 class="text-3xl font-bold text-slate-900 mt-2">{{ job.title }}</h1>
+    <div class="flex flex-wrap items-center gap-3 mt-1 text-slate-600 text-sm">
+      <span>{{ job.company }} · {{ job.requirements.seniority }}</span>
+      <span *ngIf="job.modality" class="capitalize">{{ job.modality }}</span>
+      <span *ngIf="job.location">{{ job.location }}</span>
+      <span *ngIf="job.salary">{{ job.salary }}</span>
+      <span *ngIf="job.vacancies">{{ job.vacancies }} vacante{{ job.vacancies !== 1 ? 's' : '' }}</span>
+      <span *ngIf="job.publishedAt">Publicado: {{ job.publishedAt | date:'dd/MM/yyyy' }}</span>
+      <span *ngIf="job.hiringStatus" [class]="hiringStatusClass(job.hiringStatus)"
+        class="px-2 py-0.5 rounded text-xs font-medium">{{ job.hiringStatus }}</span>
+    </div>
+  </header>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div class="lg:col-span-2 space-y-6">
+      <section class="card">
+        <h2 class="text-lg font-semibold mb-2">Descripción</h2>
+        <p class="text-sm text-slate-700 whitespace-pre-line">{{ job.description }}</p>
+        <div *ngIf="job.sourceLink && job.sourceLink !== 'form'" class="mt-4 text-xs text-slate-500">
+          Fuente: <a [href]="job.sourceLink" target="_blank" rel="noreferrer" class="text-primary-600 hover:underline">{{ job.sourceLink }}</a>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 class="text-lg font-semibold mb-3">Entrevistas</h2>
+        <div *ngIf="job.interviews.length === 0" class="text-sm text-slate-500">
+          Todavía no hay entrevistas para este puesto.
+          <a [routerLink]="['/entrevistas/nueva']" [queryParams]="{jobId: job.id}" class="text-primary-600 hover:underline">Agendar una</a>
+        </div>
+        <table *ngIf="job.interviews.length > 0" class="w-full text-sm">
+          <thead class="text-slate-600">
+            <tr class="border-b border-slate-200">
+              <th class="text-left py-2">Candidato</th>
+              <th class="text-left py-2">Estado</th>
+              <th class="text-left py-2">Creada</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let iv of job.interviews" class="border-b border-slate-100">
+              <td class="py-2">{{ candidateName(iv.candidateId) }}</td>
+              <td class="py-2"><app-status-badge [status]="iv.status"></app-status-badge></td>
+              <td class="py-2 text-slate-500">{{ iv.createdAt | date:'dd/MM/yyyy' }}</td>
+              <td class="py-2 text-right">
+                <a [routerLink]="['/entrevistas', iv.id]" class="text-primary-600 hover:underline">Ver →</a>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="mt-4">
+          <a [routerLink]="['/entrevistas/nueva']" [queryParams]="{jobId: job.id}" class="btn-primary">
+            + Nueva entrevista para este puesto
+          </a>
+        </div>
+      </section>
+    </div>
+
+    <aside class="space-y-6">
+      <section class="card">
+        <h2 class="text-lg font-semibold mb-3">Stack y requisitos</h2>
+        <div class="flex flex-wrap gap-1 mb-4">
+          <span *ngFor="let s of job.requirements.stack"
+            class="text-xs bg-primary-50 text-primary-700 px-2 py-0.5 rounded">{{ s }}</span>
+        </div>
+        <p class="text-xs text-slate-500 mb-1">Experiencia</p>
+        <p class="text-sm mb-3">{{ job.requirements.yearsOfExperience }}+ años</p>
+        <p class="text-xs text-slate-500 mb-1">Responsabilidades</p>
+        <ul class="text-sm list-disc list-inside text-slate-700 mb-3">
+          <li *ngFor="let r of job.requirements.responsibilities">{{ r }}</li>
+        </ul>
+        <ng-container *ngIf="job.requirements.niceToHave.length > 0">
+          <p class="text-xs text-slate-500 mb-1">Nice to have</p>
+          <ul class="text-sm list-disc list-inside text-slate-700">
+            <li *ngFor="let r of job.requirements.niceToHave">{{ r }}</li>
+          </ul>
+        </ng-container>
+      </section>
+
+      <section *ngIf="company" class="card">
+        <h2 class="text-lg font-semibold mb-3">Empresa</h2>
+        <div class="flex items-center gap-3 mb-3">
+          <img *ngIf="company.logoUrl" [src]="company.logoUrl" [alt]="company.name"
+            class="w-12 h-12 rounded-lg object-contain border border-slate-200 bg-white shrink-0" />
+          <div *ngIf="!company.logoUrl"
+            class="w-12 h-12 rounded-lg bg-primary-50 text-primary-700 grid place-items-center text-xl font-bold shrink-0">
+            {{ company.name[0].toUpperCase() }}
+          </div>
+          <div>
+            <p class="font-semibold text-slate-900">{{ company.name }}</p>
+            <div class="flex items-center gap-2 text-xs text-slate-500 mt-0.5">
+              <span *ngIf="company.country">{{ company.country }}</span>
+              <span *ngIf="company.cuit">CUIT {{ company.cuit }}</span>
+              <span *ngIf="company.type" class="capitalize px-1.5 py-0.5 rounded bg-slate-100">{{ company.type }}</span>
+            </div>
+          </div>
+        </div>
+        <div *ngIf="company.mission" class="mb-2">
+          <p class="text-xs text-slate-500 mb-0.5 font-medium">Misión</p>
+          <p class="text-sm text-slate-700">{{ company.mission }}</p>
+        </div>
+        <div *ngIf="company.vision">
+          <p class="text-xs text-slate-500 mb-0.5 font-medium">Visión</p>
+          <p class="text-sm text-slate-700">{{ company.vision }}</p>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 class="text-lg font-semibold mb-3">Preferencias de entrevista</h2>
+        <p class="text-sm">Duración: <strong>{{ job.preferences.durationMinutes }} min</strong></p>
+        <p class="text-sm">Tono: <strong>{{ job.preferences.toneOfVoice }}</strong></p>
+        <p class="text-sm mt-3 mb-1 text-xs text-slate-500">Dimensiones</p>
+        <div class="flex flex-wrap gap-1">
+          <span *ngFor="let d of job.preferences.dimensionsToCover"
+            class="text-xs bg-slate-100 text-slate-700 px-2 py-0.5 rounded">{{ dimensionLabels[d] }}</span>
+        </div>
+        <p class="text-sm mt-3">
+          Informe 1: <strong>{{ job.preferences.generateReport1 ? 'sí' : 'no' }}</strong>
+          · Informe 2: <strong>{{ job.preferences.generateReport2 ? 'sí' : 'no' }}</strong>
+        </p>
+      </section>
+    </aside>
+  </div>
+</ng-container>

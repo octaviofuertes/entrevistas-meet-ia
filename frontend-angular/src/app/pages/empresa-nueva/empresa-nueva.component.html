@@ -1,0 +1,70 @@
+<header class="mb-8">
+  <a routerLink="/empresas" class="text-sm text-primary-600 hover:underline">← Empresas</a>
+  <h1 class="text-3xl font-bold text-slate-900 mt-2">Nueva empresa</h1>
+  <p class="text-slate-600 mt-1">Esta información se usa para enriquecer los puestos y mostrársela a los candidatos.</p>
+</header>
+
+<form (submit)="onSubmit($event)" class="card space-y-6 max-w-2xl">
+  <div class="flex items-center gap-4">
+    <img *ngIf="logoPreview" [src]="logoPreview" alt="Logo"
+      class="w-20 h-20 rounded-xl object-contain border border-slate-200 bg-white" />
+    <div *ngIf="!logoPreview"
+      class="w-20 h-20 rounded-xl bg-slate-100 grid place-items-center text-3xl font-bold text-slate-300">
+      {{ name ? name[0].toUpperCase() : '?' }}
+    </div>
+    <div>
+      <label class="label mb-1">Logo</label>
+      <button type="button" (click)="logoInput.click()" class="btn-secondary text-sm">
+        {{ logoPreview ? 'Cambiar logo' : 'Subir logo' }}
+      </button>
+      <input #logoInput type="file" accept="image/*" class="hidden" (change)="handleLogoFile($event)" />
+      <p class="text-xs text-slate-500 mt-1">PNG, JPG, SVG — máx 2 MB</p>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-2 gap-4">
+    <div>
+      <label class="label">Nombre de la empresa *</label>
+      <input class="input" required [(ngModel)]="name" name="name" placeholder="Ej: Acme Corp" />
+    </div>
+    <div>
+      <label class="label">Tipo</label>
+      <select class="input" [(ngModel)]="type" name="type">
+        <option value="">— Sin especificar —</option>
+        <option value="privada">Privada</option>
+        <option value="publica">Pública</option>
+        <option value="mixta">Mixta</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-2 gap-4">
+    <div>
+      <label class="label">País</label>
+      <input class="input" [(ngModel)]="country" name="country" placeholder="Ej: Argentina" />
+    </div>
+    <div>
+      <label class="label">CUIT</label>
+      <input class="input" [(ngModel)]="cuit" name="cuit" placeholder="Ej: 30-12345678-9" />
+    </div>
+  </div>
+
+  <div>
+    <label class="label">Misión</label>
+    <textarea class="input" rows="3" [(ngModel)]="mission" name="mission"
+      placeholder="¿Para qué existe la empresa? ¿Cuál es su propósito?"></textarea>
+  </div>
+
+  <div>
+    <label class="label">Visión</label>
+    <textarea class="input" rows="3" [(ngModel)]="vision" name="vision"
+      placeholder="¿A dónde quiere llegar la empresa a futuro?"></textarea>
+  </div>
+
+  <div *ngIf="error" class="p-3 bg-red-50 border border-red-200 rounded-lg text-red-800 text-sm">{{ error }}</div>
+
+  <div class="flex gap-3">
+    <button type="submit" class="btn-primary" [disabled]="busy">{{ busy ? 'Guardando…' : 'Crear empresa' }}</button>
+    <a routerLink="/empresas" class="btn-secondary">Cancelar</a>
+  </div>
+</form>

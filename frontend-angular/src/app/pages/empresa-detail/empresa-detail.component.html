@@ -1,0 +1,71 @@
+<p *ngIf="loading" class="text-slate-500">Cargando…</p>
+<p *ngIf="error && !loading" class="text-red-600">{{ error }}</p>
+
+<ng-container *ngIf="!loading && company">
+  <header class="mb-8">
+    <a routerLink="/empresas" class="text-sm text-primary-600 hover:underline">← Empresas</a>
+    <h1 class="text-3xl font-bold text-slate-900 mt-2">{{ company.name }}</h1>
+  </header>
+
+  <form (submit)="onSubmit($event)" class="card space-y-6 max-w-2xl">
+    <div class="flex items-center gap-4">
+      <img *ngIf="logoPreview" [src]="logoPreview" alt="Logo"
+        class="w-20 h-20 rounded-xl object-contain border border-slate-200 bg-white" />
+      <div *ngIf="!logoPreview"
+        class="w-20 h-20 rounded-xl bg-slate-100 grid place-items-center text-3xl font-bold text-slate-300">
+        {{ name ? name[0].toUpperCase() : '?' }}
+      </div>
+      <div>
+        <label class="label mb-1">Logo</label>
+        <button type="button" (click)="logoInput.click()" class="btn-secondary text-sm">
+          {{ logoPreview ? 'Cambiar logo' : 'Subir logo' }}
+        </button>
+        <input #logoInput type="file" accept="image/*" class="hidden" (change)="handleLogoFile($event)" />
+      </div>
+    </div>
+
+    <div class="grid grid-cols-2 gap-4">
+      <div>
+        <label class="label">Nombre *</label>
+        <input class="input" required [(ngModel)]="name" name="name" />
+      </div>
+      <div>
+        <label class="label">Tipo</label>
+        <select class="input" [(ngModel)]="type" name="type">
+          <option value="">— Sin especificar —</option>
+          <option value="privada">Privada</option>
+          <option value="publica">Pública</option>
+          <option value="mixta">Mixta</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-2 gap-4">
+      <div>
+        <label class="label">País</label>
+        <input class="input" [(ngModel)]="country" name="country" />
+      </div>
+      <div>
+        <label class="label">CUIT</label>
+        <input class="input" [(ngModel)]="cuit" name="cuit" />
+      </div>
+    </div>
+
+    <div>
+      <label class="label">Misión</label>
+      <textarea class="input" rows="3" [(ngModel)]="mission" name="mission"></textarea>
+    </div>
+    <div>
+      <label class="label">Visión</label>
+      <textarea class="input" rows="3" [(ngModel)]="vision" name="vision"></textarea>
+    </div>
+
+    <div *ngIf="error" class="p-3 bg-red-50 border border-red-200 rounded-lg text-red-800 text-sm">{{ error }}</div>
+    <div *ngIf="saved" class="p-3 bg-green-50 border border-green-200 rounded-lg text-green-800 text-sm">Cambios guardados correctamente.</div>
+
+    <div class="flex gap-3">
+      <button type="submit" class="btn-primary" [disabled]="busy">{{ busy ? 'Guardando…' : 'Guardar cambios' }}</button>
+      <a routerLink="/empresas" class="btn-secondary">Volver</a>
+    </div>
+  </form>
+</ng-container>

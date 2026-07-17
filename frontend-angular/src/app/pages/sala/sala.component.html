@@ -1,0 +1,276 @@
+<!-- Loading -->
+<div *ngIf="phase === 'loading'" style="position:fixed;inset:0;background:#000;display:flex;align-items:center;justify-content:center">
+  <div style="width:40px;height:40px;border-radius:50%;border:3px solid #3c4043;border-top-color:#8ab4f8;animation:spin 0.8s linear infinite"></div>
+  <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+</div>
+
+<!-- Error -->
+<div *ngIf="phase === 'error'" style="position:fixed;inset:0;background:#000;display:flex;align-items:center;justify-content:center;font-family:Google Sans,sans-serif;color:#fff">
+  <div style="text-align:center">
+    <p style="font-size:18px;margin-bottom:8px">Sala no encontrada</p>
+    <p style="font-size:13px;color:#9aa0a6">{{ errMsg }}</p>
+  </div>
+</div>
+
+<!-- Finished -->
+<div *ngIf="phase === 'finished'" style="position:fixed;inset:0;background:#111;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px;font-family:Google Sans,Roboto,sans-serif;color:#fff;padding:24px">
+  <div style="width:72px;height:72px;border-radius:50%;background:#1a3a1f;display:flex;align-items:center;justify-content:center">
+    <svg width="36" height="36" viewBox="0 0 24 24" fill="none">
+      <path d="M5 13l4 4L19 7" stroke="#34a853" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </div>
+  <div style="text-align:center;max-width:420px">
+    <h1 style="font-size:22px;font-weight:400;margin:0 0 10px">Entrevista finalizada</h1>
+    <p style="color:#9aa0a6;margin:0;line-height:1.5">
+      Gracias<ng-container *ngIf="info?.candidateName">, {{ info!.candidateName }}</ng-container>.
+      El equipo de <strong style="color:#e8eaed">{{ info?.company ?? 'la empresa' }}</strong> se pondrá en contacto pronto.
+    </p>
+    <p *ngIf="elapsed > 0" style="color:#5f6368;font-size:13px;margin-top:8px">Duración: {{ fmt(elapsed) }}</p>
+  </div>
+  <div style="text-align:center">
+    <div *ngIf="hasReport" style="display:flex;flex-direction:column;align-items:center;gap:12px">
+      <p style="color:#34a853;font-weight:500;margin:0">✓ Informe generado</p>
+      <a [href]="frontendUrl + '/entrevistas/' + interviewId + '/informe'"
+        style="display:inline-block;padding:10px 24px;background:#1a73e8;color:#fff;border-radius:6px;text-decoration:none;font-size:14px;font-weight:500">
+        Ver informe
+      </a>
+    </div>
+    <div *ngIf="!hasReport" style="display:flex;flex-direction:column;align-items:center;gap:10px">
+      <div style="display:flex;align-items:center;gap:10px;color:#9aa0a6">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" style="animation:spin 1.2s linear infinite">
+          <circle cx="12" cy="12" r="9" stroke="#5f6368" stroke-width="2.5" stroke-dasharray="30 10" stroke-linecap="round"/>
+        </svg>
+        <span style="font-size:14px">Generando informe{{ dots }}</span>
+      </div>
+      <p style="font-size:12px;color:#5f6368;margin:0">leIA está analizando la entrevista. Esto tarda unos segundos.</p>
+      <a [href]="frontendUrl + '/entrevistas/' + interviewId"
+        style="font-size:12px;color:#8ab4f8;text-decoration:none;margin-top:4px">
+        Ver detalle de la entrevista →
+      </a>
+    </div>
+  </div>
+  <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+</div>
+
+<!-- Lobby -->
+<div *ngIf="phase === 'lobby'" style="position:fixed;inset:0;background:#000;font-family:Google Sans,Roboto,sans-serif;color:#fff;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:24px;padding:16px">
+  <div style="text-align:center">
+    <p style="color:#8ab4f8;font-size:13px;font-weight:500;margin:0 0 4px">{{ info?.company }}</p>
+    <h1 style="font-size:22px;font-weight:400;margin:0">{{ info?.jobTitle ?? 'Entrevista' }}</h1>
+    <p *ngIf="info?.candidateName" style="color:#9aa0a6;font-size:13px;margin:4px 0 0">Hola, {{ info!.candidateName }}</p>
+  </div>
+
+  <div style="position:relative;width:min(480px,calc(100vw - 32px));aspect-ratio:4/3;border-radius:12px;overflow:hidden;background:#1c1c1c">
+    <video #lobbyVid autoplay playsinline muted
+      style="width:100%;height:100%;object-fit:cover;transform:scaleX(-1);display:block"></video>
+    <div style="position:absolute;bottom:12px;left:12px;background:rgba(0,0,0,0.65);border-radius:4px;padding:3px 10px;font-size:13px">
+      {{ info?.candidateName ?? 'Tú' }}
+    </div>
+    <div style="position:absolute;bottom:12px;right:12px;display:flex;gap:8px">
+      <button (click)="toggleMic()"
+        [style.background]="micOn ? '#3c4043' : '#ea4335'"
+        style="border:none;border-radius:50%;width:36px;height:36px;cursor:pointer;display:flex;align-items:center;justify-content:center">
+        <svg *ngIf="micOn" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>
+        </svg>
+        <svg *ngIf="!micOn" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v2a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.95-.6"/><path d="M17 16.95A7 7 0 0 1 5 10v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>
+        </svg>
+      </button>
+      <button (click)="toggleCam()"
+        [style.background]="cameraOn ? '#3c4043' : '#ea4335'"
+        style="border:none;border-radius:50%;width:36px;height:36px;cursor:pointer;display:flex;align-items:center;justify-content:center">
+        <svg *ngIf="cameraOn" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="23 7 16 12 23 17 23 7" fill="white" stroke="none"/><rect x="1" y="5" width="15" height="14" rx="2"/>
+        </svg>
+        <svg *ngIf="!cameraOn" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="1" y1="1" x2="23" y2="23"/><path d="M21 21H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3"/><path d="M11 5H6l2-3h7l2 3h3a2 2 0 0 1 2 2v9"/><line x1="23" y1="7" x2="16" y2="11"/><line x1="16" y1="13" x2="23" y2="17"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:8px;max-width:340px">
+    <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;color:#e8eaed;cursor:pointer">
+      <input type="checkbox" [checked]="consentRecording" (change)="setConsentRecording($any($event.target).checked)" style="margin-top:2px" />
+      Acepto que esta entrevista sea grabada.
+    </label>
+    <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;color:#e8eaed;cursor:pointer">
+      <input type="checkbox" [checked]="consentAnalysis" (change)="setConsentAnalysis($any($event.target).checked)" style="margin-top:2px" />
+      Acepto que se analicen señales de atención por cámara durante la entrevista.
+    </label>
+  </div>
+
+  <div style="display:flex;flex-direction:column;align-items:center;gap:6px">
+    <label style="font-size:13px;color:#8ab4f8;cursor:pointer">
+      {{ cvStatus === 'uploading' ? 'Subiendo CV…' : 'Subí tu CV (PDF, opcional)' }}
+      <input type="file" accept="application/pdf" style="display:none" (change)="uploadCv($event)" />
+    </label>
+    <p *ngIf="cvStatus === 'ok'"    style="color:#81c995;font-size:12px;margin:0">CV cargado ✓</p>
+    <p *ngIf="cvStatus === 'empty'" style="color:#9aa0a6;font-size:12px;margin:0">No pudimos leer el texto del PDF, pero podés continuar igual.</p>
+    <p *ngIf="cvStatus === 'error'" style="color:#f28b82;font-size:12px;margin:0">No se pudo subir el CV, pero podés continuar igual.</p>
+  </div>
+
+  <button (click)="joinCall()" [disabled]="!consentRecording"
+    [style.cursor]="consentRecording ? 'pointer' : 'not-allowed'"
+    [style.opacity]="consentRecording ? '1' : '0.5'"
+    style="background:#1a73e8;color:#fff;border:none;border-radius:24px;padding:12px 40px;font-size:15px;font-weight:500;font-family:inherit;letter-spacing:0.15px">
+    Unirse ahora
+  </button>
+  <p style="color:#5f6368;font-size:12px;text-align:center;max-width:300px;margin:0">
+    leIA conducirá la entrevista. Respondé en voz alta cada pregunta.
+  </p>
+</div>
+
+<!-- Running -->
+<div *ngIf="phase === 'running'" style="position:fixed;inset:0;background:#000;font-family:Google Sans,Roboto,sans-serif;color:#fff;overflow:hidden;user-select:none">
+
+  <!-- Top bar -->
+  <div style="position:absolute;top:0;inset:0 0 auto 0;height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;z-index:20">
+    <span style="font-size:13px;color:#9aa0a6;letter-spacing:0.2px">{{ fmt(elapsed) }}&nbsp;·&nbsp;{{ meetCode }}</span>
+    <div style="display:flex;align-items:center;gap:10px">
+      <div *ngIf="recording" style="display:flex;align-items:center;gap:6px;background:rgba(234,67,53,0.18);border:1px solid rgba(234,67,53,0.4);border-radius:20px;padding:3px 10px">
+        <span style="width:7px;height:7px;border-radius:50%;background:#ea4335;display:inline-block;animation:pulse 1.4s ease-in-out infinite"></span>
+        <span style="font-size:11px;font-weight:600;letter-spacing:1px;color:#ea4335">REC</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main tile (leIA) -->
+  <div style="position:absolute;inset:52px 0 72px 0;display:flex;align-items:center;justify-content:center;padding:8px">
+    <div [style.box-shadow]="leiaSpeaking ? '0 0 0 3px #1a73e8' : '0 0 0 1px rgba(255,255,255,0.08)'"
+      style="position:relative;width:min(calc((100vh - 132px) * 16 / 9),calc(100vw - 16px));height:min(calc(100vw / 16 * 9),calc(100vh - 132px));border-radius:12px;overflow:hidden;background:#1c1c1c;transition:box-shadow 0.15s">
+      <video #idleVid autoplay loop muted playsinline crossorigin="anonymous"
+        style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover">
+        <source [src]="apiUrl + '/bot-stage-video/idle'" type="video/mp4" />
+      </video>
+      <video #talkVid loop muted playsinline crossorigin="anonymous"
+        style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none">
+        <source [src]="apiUrl + '/bot-stage-video/talk'" type="video/mp4" />
+      </video>
+      <!-- Thinking dots -->
+      <div *ngIf="leiaThinking && !leiaSpeaking"
+        style="position:absolute;bottom:16px;left:16px;display:flex;gap:5px;align-items:center;background:rgba(0,0,0,0.55);border-radius:20px;padding:6px 14px">
+        <span *ngFor="let d of [0,150,300]"
+          [style.animation-delay]="d + 'ms'"
+          style="width:7px;height:7px;border-radius:50%;background:#fff;display:inline-block;animation:bounce 1s ease-in-out infinite"></span>
+      </div>
+      <!-- Sound bars -->
+      <div *ngIf="leiaSpeaking"
+        style="position:absolute;bottom:18px;left:16px;display:flex;align-items:flex-end;gap:3px;height:20px">
+        <span *ngFor="let i of [0,1,2,3]"
+          [style.animation]="'eq ' + (0.5 + i * 0.07) + 's ease-in-out ' + (i * 55) + 'ms infinite alternate'"
+          style="width:3px;border-radius:3px;background:#1a73e8;opacity:0.9;display:inline-block"></span>
+      </div>
+      <!-- Name badge -->
+      <div [style.left]="leiaSpeaking ? '38px' : '16px'"
+        style="position:absolute;bottom:16px;transition:left 0.15s;background:rgba(0,0,0,0.65);border-radius:4px;padding:3px 10px;font-size:13px;display:flex;align-items:center;gap:7px">
+        <span *ngIf="leiaSpeaking" style="width:8px;height:8px;border-radius:50%;background:#1a73e8;display:inline-block;flex-shrink:0"></span>
+        leIA
+      </div>
+    </div>
+  </div>
+
+  <!-- PiP self-cam -->
+  <div [style.box-shadow]="listening ? '0 0 0 2px #34a853' : '0 0 0 1px rgba(255,255,255,0.12)'"
+    style="position:absolute;bottom:84px;right:12px;width:180px;height:101px;border-radius:8px;overflow:hidden;background:#1c1c1c;transition:box-shadow 0.15s;z-index:10">
+    <video #pipVid autoplay playsinline muted
+      [style.visibility]="cameraOn ? 'visible' : 'hidden'"
+      style="width:100%;height:100%;object-fit:cover;transform:scaleX(-1);display:block"></video>
+    <div *ngIf="!cameraOn"
+      style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:26px;background:#1c1c1c">
+      {{ (info?.candidateName ?? 'T')[0].toUpperCase() }}
+    </div>
+    <div style="position:absolute;bottom:5px;left:7px;font-size:11px;background:rgba(0,0,0,0.65);border-radius:3px;padding:1px 6px">
+      {{ info?.candidateName ?? 'Tú' }} (tú)
+    </div>
+    <div *ngIf="!micOn"
+      style="position:absolute;top:5px;right:6px;background:rgba(0,0,0,0.6);border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v2a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.95-.6"/><path d="M17 16.95A7 7 0 0 1 5 10v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>
+      </svg>
+    </div>
+  </div>
+
+  <!-- Subtitles -->
+  <div *ngIf="showCC && (subtitle || interimText)"
+    style="position:absolute;bottom:80px;left:12px;right:204px;display:flex;flex-direction:column;align-items:center;gap:6px;z-index:11;pointer-events:none">
+    <div *ngIf="subtitle"
+      [style.opacity]="leiaSpeaking ? '1' : '0.65'"
+      style="width:100%;max-width:680px;background:rgba(0,0,0,0.82);backdrop-filter:blur(14px);border-radius:10px;padding:10px 16px 11px;border-left:3px solid #1a73e8;transition:opacity 0.4s ease">
+      <div style="font-size:10px;font-weight:700;letter-spacing:1.1px;color:#1a73e8;text-transform:uppercase;margin-bottom:4px">leIA</div>
+      <div style="font-size:15px;color:#e8eaed;line-height:1.55;font-weight:400">{{ subtitle }}</div>
+    </div>
+    <div *ngIf="interimText"
+      style="width:100%;max-width:680px;background:rgba(0,0,0,0.78);backdrop-filter:blur(14px);border-radius:10px;padding:10px 16px 11px;border-left:3px solid #34a853">
+      <div style="font-size:10px;font-weight:700;letter-spacing:1.1px;color:#34a853;text-transform:uppercase;margin-bottom:4px">
+        {{ info?.candidateName ?? 'Tú' }}
+      </div>
+      <div style="font-size:15px;color:rgba(232,234,237,0.9);line-height:1.55;font-weight:400">
+        {{ interimText }}<span style="display:inline-block;width:2px;height:14px;background:#34a853;margin-left:3px;border-radius:1px;vertical-align:middle;animation:blink 1s step-end infinite"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Control bar -->
+  <div style="position:absolute;bottom:0;inset:auto 0 0 0;height:72px;display:flex;align-items:center;justify-content:center;gap:8px;z-index:30;padding:0 12px">
+    <div style="display:flex;gap:6px;margin-right:8px">
+      <!-- CC button -->
+      <button (click)="showCC = !showCC" title="Subtítulos"
+        [style.outline]="showCC ? '2px solid #1a73e8' : 'none'"
+        style="background:#3c4043;border:none;border-radius:50%;width:48px;height:48px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="5" width="20" height="14" rx="2"/><path d="M9 10.5a2.5 2.5 0 0 0-4 0v3a2.5 2.5 0 0 0 4 0"/><path d="M19 10.5a2.5 2.5 0 0 0-4 0v3a2.5 2.5 0 0 0 4 0"/>
+        </svg>
+      </button>
+      <!-- Rec button -->
+      <button (click)="toggleRec()" [title]="recording ? 'Detener grabación' : 'Grabar'"
+        [style.background]="recording ? '#3c4043' : '#3c4043'"
+        [style.outline]="recording ? '2px solid #ea4335' : 'none'"
+        style="border:none;border-radius:50%;width:48px;height:48px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        <svg *ngIf="recording" width="20" height="20" viewBox="0 0 24 24" fill="white"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+        <svg *ngIf="!recording" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
+          <circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.5" fill="white" stroke="none"/>
+        </svg>
+      </button>
+    </div>
+    <!-- Mic -->
+    <button (click)="toggleMic()" [title]="micOn ? 'Silenciar' : 'Activar micrófono'"
+      [style.background]="!micOn ? '#ea4335' : '#3c4043'"
+      style="border:none;border-radius:50%;width:48px;height:48px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+      <svg *ngIf="micOn" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>
+      </svg>
+      <svg *ngIf="!micOn" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v2a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.95-.6"/><path d="M17 16.95A7 7 0 0 1 5 10v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>
+      </svg>
+    </button>
+    <!-- Cam -->
+    <button (click)="toggleCam()" [title]="cameraOn ? 'Apagar cámara' : 'Encender cámara'"
+      [style.background]="!cameraOn ? '#ea4335' : '#3c4043'"
+      style="border:none;border-radius:50%;width:48px;height:48px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+      <svg *ngIf="cameraOn" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="23 7 16 12 23 17 23 7" fill="white" stroke="none"/><rect x="1" y="5" width="15" height="14" rx="2"/>
+      </svg>
+      <svg *ngIf="!cameraOn" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="1" y1="1" x2="23" y2="23"/><path d="M21 21H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3"/><path d="M11 5H6l2-3h7l2 3h3a2 2 0 0 1 2 2v9"/><line x1="23" y1="7" x2="16" y2="11"/><line x1="16" y1="13" x2="23" y2="17"/>
+      </svg>
+    </button>
+    <!-- Hang up -->
+    <div style="margin-left:8px">
+      <button (click)="endCall()" title="Finalizar entrevista"
+        style="width:54px;height:54px;border-radius:50%;background:#ea4335;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,0.5)">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="white">
+          <path d="M6.6 10.8c1.4 2.8 3.8 5.14 6.59 6.59l2.2-2.2c.28-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" transform="rotate(135 12 12)"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <style>
+    @keyframes pulse  { 0%,100%{opacity:1} 50%{opacity:.25} }
+    @keyframes bounce { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
+    @keyframes eq     { from{height:4px} to{height:18px} }
+    @keyframes blink  { 0%,100%{opacity:1} 50%{opacity:0} }
+  </style>
+</div>

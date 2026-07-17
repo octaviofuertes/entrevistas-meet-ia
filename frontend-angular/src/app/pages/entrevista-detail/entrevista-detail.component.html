@@ -1,0 +1,172 @@
+<p *ngIf="loading" class="text-slate-500">Cargando...</p>
+<p *ngIf="error && !loading" class="text-red-600">{{ error }}</p>
+
+<ng-container *ngIf="!loading && data">
+  <header class="mb-6">
+    <a routerLink="/entrevistas" class="text-sm text-slate-500 hover:text-slate-700">← Volver</a>
+    <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between mt-2">
+      <div>
+        <h1 class="text-3xl font-bold text-slate-900">{{ data.candidate?.name ?? 'Entrevista' }}</h1>
+        <p class="text-slate-600 mt-1">{{ data.job?.title ?? '-' }} - {{ data.job?.company ?? '' }}</p>
+      </div>
+      <div class="flex flex-wrap items-center gap-3">
+        <app-status-badge [status]="data.status"></app-status-badge>
+        <span *ngIf="isBrowser && data.status === 'agendada'"
+          class="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-3 py-1 rounded-full font-medium">
+          Sala nativa
+        </span>
+        <button *ngIf="(data.status === 'agendada' || data.status === 'en_curso') && !isBrowser"
+          (click)="onStart()" class="btn-primary" [disabled]="starting">
+          {{ starting ? 'Iniciando...' : 'Iniciar entrevista' }}
+        </button>
+        <button *ngIf="data.status === 'en_curso'" (click)="load()" class="btn-secondary">Refrescar</button>
+        <a *ngIf="hasR1 || hasR2" [routerLink]="['/entrevistas', data.id, 'informe']" class="btn-primary">Ver informe</a>
+      </div>
+    </div>
+  </header>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div class="lg:col-span-2 space-y-4">
+
+      <!-- Sala agendada banner -->
+      <div *ngIf="isBrowser && data.status === 'agendada'" class="card bg-blue-50 border border-blue-200">
+        <h2 class="font-semibold text-blue-900 mb-2">Link de la sala para el candidato</h2>
+        <p class="text-sm text-blue-700 mb-3">Compartí este link. La entrevista empieza automáticamente cuando el candidato se conecte.</p>
+        <div class="flex items-center gap-2">
+          <input readonly class="flex-1 font-mono text-sm bg-white border border-blue-200 rounded-lg px-3 py-2 text-blue-800" [value]="salaUrl" />
+          <button (click)="copySalaUrl()" class="shrink-0 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors">
+            {{ copied ? 'Copiado ✓' : 'Copiar' }}
+          </button>
+        </div>
+        <div class="mt-3">
+          <a [href]="salaUrl" target="_blank" rel="noreferrer" class="text-xs text-blue-600 hover:underline">
+            Abrir sala (vista candidato) →
+          </a>
+        </div>
+      </div>
+
+      <!-- Sala en curso banner -->
+      <div *ngIf="isBrowser && data.status === 'en_curso'" class="card bg-green-50 border border-green-200">
+        <h2 class="font-semibold text-green-900 mb-1">Sala en curso</h2>
+        <p class="text-xs text-green-700 mb-3">leIA está entrevistando al candidato en la sala nativa.</p>
+        <div class="flex gap-2">
+          <a [href]="salaUrl" target="_blank" rel="noreferrer" class="btn-primary text-sm">Ver sala</a>
+          <button (click)="load()" class="btn-secondary text-sm">Refrescar</button>
+        </div>
+      </div>
+
+      <!-- Grabación -->
+      <div *ngIf="isBrowser && data.status !== 'agendada'" class="card">
+        <h2 class="text-lg font-semibold mb-1">Grabación</h2>
+        <p class="text-xs text-slate-500 mb-3">Video compuesto: leIA + candidato (con audio)</p>
+        <video controls preload="metadata" class="w-full rounded-lg bg-black" style="max-height:480px"
+          [src]="apiUrl + '/api/sala/' + data.id + '/recording'"
+          (error)="$any($event.target).style.display='none'"></video>
+      </div>
+
+      <!-- Turnos -->
+      <div class="card">
+        <h2 class="text-lg font-semibold mb-3">Turnos pregunta/respuesta</h2>
+        <p *ngIf="data.turns.length === 0" class="text-sm text-slate-500">
+          {{ isBrowser ? 'Todavía no hubo turnos. El candidato debe conectarse a la sala para que leIA arranque.' : 'Todavía no hubo turnos. Inicia la entrevista para que leIA arranque.' }}
+        </p>
+        <div *ngIf="data.turns.length > 0" class="space-y-4">
+          <div *ngFor="let t of data.turns" class="border-l-4 border-primary-500 pl-4 py-2">
+            <div class="text-xs text-slate-500 mb-1">Turno #{{ t.index + 1 }}</div>
+            <p class="font-medium mb-2">{{ t.question }}</p>
+            <div class="text-sm text-slate-700 italic bg-slate-50 p-2 rounded mb-1">
+              <em *ngIf="!t.answerTranscript" class="text-slate-400">(sin respuesta)</em>
+              {{ t.answerTranscript }}
+            </div>
+            <ng-container *ngFor="let ev of data.evaluations">
+              <div *ngIf="ev.turnId === t.id" class="text-xs text-slate-500 mt-1">
+                Score: <strong>{{ ev.score.toFixed(1) }}/10</strong> - {{ ev.rationale }}
+              </div>
+            </ng-container>
+          </div>
+        </div>
+      </div>
+
+      <!-- Evaluaciones -->
+      <div *ngIf="data.evaluations.length > 0" class="card">
+        <h2 class="text-lg font-semibold mb-3">Evaluaciones ({{ data.evaluations.length }})</h2>
+        <div class="space-y-3">
+          <div *ngFor="let e of data.evaluations; let i = index" class="p-3 bg-slate-50 rounded-lg">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-sm font-medium">Evaluación #{{ i + 1 }}</span>
+              <span class="badge bg-primary-100 text-primary-800">{{ e.score.toFixed(1) }}/10</span>
+            </div>
+            <p class="text-sm text-slate-700 mb-2">{{ e.rationale }}</p>
+            <div class="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs">
+              <div *ngFor="let k of allDimensions">
+                <span class="text-slate-500">{{ dimensionLabels[k] }}: </span>
+                <strong>{{ e.dimensions[k].toFixed(1) }}</strong>
+              </div>
+            </div>
+            <div *ngIf="e.flags.length > 0" class="mt-2 flex flex-wrap gap-1">
+              <span *ngFor="let f of e.flags" class="text-xs bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded">{{ f }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <aside class="space-y-4">
+      <div class="card">
+        <h3 class="font-semibold mb-3">Detalles</h3>
+        <dl class="text-sm space-y-2">
+          <div class="flex items-center justify-between gap-4"><dt class="text-slate-500">Puesto</dt><dd class="font-medium text-slate-900 text-right">{{ data.job?.title ?? '-' }}</dd></div>
+          <div class="flex items-center justify-between gap-4"><dt class="text-slate-500">Empresa</dt><dd class="font-medium text-slate-900 text-right">{{ data.job?.company ?? '-' }}</dd></div>
+          <div class="flex items-center justify-between gap-4"><dt class="text-slate-500">Candidato</dt><dd class="font-medium text-slate-900 text-right">{{ data.candidate?.name ?? '-' }}</dd></div>
+          <div class="flex items-center justify-between gap-4"><dt class="text-slate-500">Email</dt><dd class="font-medium text-slate-900 text-right">{{ data.candidate?.email ?? '-' }}</dd></div>
+          <div class="flex items-center justify-between gap-4"><dt class="text-slate-500">Modo</dt><dd class="font-medium text-slate-900 text-right">{{ isBrowser ? '🌐 Sala browser' : '📹 Google Meet' }}</dd></div>
+          <div class="flex items-center justify-between gap-4"><dt class="text-slate-500">Voz</dt><dd class="font-medium text-slate-900 text-right">{{ selectedVoiceLabel }}</dd></div>
+          <div class="flex items-center justify-between gap-4"><dt class="text-slate-500">Turnos</dt><dd class="font-medium text-slate-900 text-right">{{ data.turns.length }}</dd></div>
+          <div class="flex items-center justify-between gap-4"><dt class="text-slate-500">Evaluaciones</dt><dd class="font-medium text-slate-900 text-right">{{ data.evaluations.length }}</dd></div>
+          <div class="flex items-center justify-between gap-4"><dt class="text-slate-500">Creada</dt><dd class="font-medium text-slate-900 text-right">{{ formatDate(data.createdAt) }}</dd></div>
+          <div *ngIf="data.startedAt" class="flex items-center justify-between gap-4"><dt class="text-slate-500">Iniciada</dt><dd class="font-medium text-slate-900 text-right">{{ formatDate(data.startedAt) }}</dd></div>
+          <div *ngIf="data.endedAt" class="flex items-center justify-between gap-4"><dt class="text-slate-500">Finalizada</dt><dd class="font-medium text-slate-900 text-right">{{ formatDate(data.endedAt) }}</dd></div>
+          <div *ngIf="data.durationSec != null" class="flex items-center justify-between gap-4"><dt class="text-slate-500">Duración</dt><dd class="font-medium text-slate-900 text-right">{{ durationMin(data.durationSec) }}</dd></div>
+        </dl>
+      </div>
+
+      <div class="card">
+        <div class="flex items-center justify-between gap-3 mb-3">
+          <h3 class="font-semibold">Voz de leIA</h3>
+          <span *ngIf="savingTts" class="text-xs text-slate-500">Guardando...</span>
+        </div>
+        <div class="grid grid-cols-2 rounded-lg border border-slate-200 bg-slate-50 p-1">
+          <button *ngFor="let opt of ttsOptions" type="button"
+            [disabled]="!canEditVoice || savingTts || starting"
+            (click)="onSelectTtsDriver(opt.value)"
+            [class]="selectedTtsDriver === opt.value ? 'bg-white text-primary-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'"
+            class="min-h-[40px] rounded-md px-3 text-sm font-medium transition-colors">
+            {{ opt.label }}
+          </button>
+        </div>
+      </div>
+
+      <div *ngIf="!isBrowser" class="card">
+        <h3 class="font-semibold mb-2">Google Meet</h3>
+        <p class="text-xs text-slate-500 mb-2">Recall.ai entra como bot a esta reunión y captura los captions nativos.</p>
+        <a [href]="data.meetUrl || '#'" target="_blank" rel="noreferrer"
+          class="block font-mono text-xs text-primary-600 hover:underline break-all">{{ data.meetUrl || '—' }}</a>
+        <p *ngIf="data.recallBotId" class="mt-2 text-[10px] text-slate-500">Bot ID: {{ data.recallBotId }}</p>
+      </div>
+
+      <div *ngIf="isBrowser" class="card">
+        <h3 class="font-semibold mb-2">Sala browser</h3>
+        <p class="text-xs text-slate-500 mb-2">Sin bots externos. El candidato accede directamente por este link.</p>
+        <button (click)="copySalaUrl()" class="w-full text-left font-mono text-xs text-primary-600 hover:underline break-all">
+          {{ salaUrl }}
+        </button>
+      </div>
+
+      <div *ngIf="data.status === 'en_curso' && !isBrowser" class="card bg-primary-50 border-primary-200">
+        <h3 class="font-semibold mb-2">Entrevista en curso</h3>
+        <p class="text-xs text-slate-600 mb-3">leIA está entrevistando al candidato en Google Meet.</p>
+        <a [href]="data.meetUrl" target="_blank" rel="noreferrer" class="btn-primary w-full justify-center">Abrir Google Meet</a>
+      </div>
+    </aside>
+  </div>
+</ng-container>

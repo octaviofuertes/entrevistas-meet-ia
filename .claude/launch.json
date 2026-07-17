@@ -4,8 +4,15 @@
     {
       "name": "frontend",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--workspace=frontend"],
+      "runtimeArgs": ["run", "dev"],
       "port": 3000
+    },
+    {
+      "name": "frontend-angular",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "start"],
+      "cwd": "frontend-angular",
+      "port": 4200
     }
   ]
 }

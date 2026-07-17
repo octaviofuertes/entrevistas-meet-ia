@@ -1,0 +1,128 @@
+<header class="mb-8 flex items-start justify-between">
+  <div>
+    <h1 class="text-3xl font-bold text-slate-900">Dashboard</h1>
+    <p class="text-slate-600 mt-1">leIA · entrevistas automáticas en Google Meet</p>
+  </div>
+  <div class="flex gap-3">
+    <a routerLink="/puestos/nuevo" class="btn-secondary">+ Puesto desde link</a>
+    <a routerLink="/entrevistas/nueva" class="btn-primary">+ Nueva entrevista</a>
+  </div>
+</header>
+
+<div *ngIf="error" class="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-800">
+  <strong>Error:</strong> {{ error }}
+</div>
+
+<div *ngIf="loading" class="text-slate-500">Cargando...</div>
+
+<ng-container *ngIf="!loading">
+  <!-- Health -->
+  <div *ngIf="health" class="mb-8 card">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-semibold">Estado del sistema</h2>
+      <span class="badge" [class]="health.demoMode ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'">
+        {{ health.demoMode ? 'Modo demo' : 'Producción' }}
+      </span>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+      <div class="p-3 rounded-lg bg-slate-50" *ngFor="let d of [
+        {label:'Base de datos', value: health.drivers.database},
+        {label:'leIA', value: health.drivers.leia},
+        {label:'Recall.ai', value: health.drivers.recall},
+        {label:'ElevenLabs TTS', value: health.drivers.tts}
+      ]">
+        <div class="text-xs text-slate-500 mb-1">{{ d.label }}</div>
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full" [class]="isReal(d.value) ? 'bg-green-500' : 'bg-yellow-500'"></span>
+          <span class="font-medium capitalize">{{ d.value }}</span>
+        </div>
+      </div>
+    </div>
+    <p *ngIf="health.demoMode" class="mt-4 text-xs text-slate-500">
+      Modo demo: leIA, Recall.ai y ElevenLabs están en mock. Configurá las API keys en
+      <code class="bg-slate-100 px-1 rounded">.env</code> para activar drivers reales.
+    </p>
+  </div>
+
+  <!-- Stat cards -->
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+    <a routerLink="/puestos" class="card hover:shadow-md transition-shadow block">
+      <div class="text-3xl font-bold text-slate-900">{{ jobs.length }}</div>
+      <div class="text-sm text-slate-500">Puestos</div>
+    </a>
+    <a routerLink="/candidatos" class="card hover:shadow-md transition-shadow block">
+      <div class="text-3xl font-bold text-slate-900">{{ candidates.length }}</div>
+      <div class="text-sm text-slate-500">Candidatos</div>
+    </a>
+    <a routerLink="/entrevistas" class="card hover:shadow-md transition-shadow block">
+      <div class="text-3xl font-bold text-slate-900">{{ interviews.length }}</div>
+      <div class="text-sm text-slate-500">Entrevistas</div>
+    </a>
+  </div>
+
+  <!-- Ranking -->
+  <div *ngIf="ranking.length > 0" class="card mb-8">
+    <h2 class="text-lg font-semibold mb-4">Ranking de candidatos</h2>
+    <table class="w-full text-sm">
+      <thead class="text-slate-600">
+        <tr class="border-b border-slate-200">
+          <th class="text-left py-2">#</th>
+          <th class="text-left py-2">Candidato</th>
+          <th class="text-left py-2">Puesto</th>
+          <th class="text-left py-2">Score</th>
+          <th class="text-left py-2">Recomendación</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr *ngFor="let r of ranking.slice(0, 10); let idx = index" class="border-b border-slate-100">
+          <td class="py-3 font-mono text-slate-500">{{ idx + 1 }}</td>
+          <td class="py-3 font-medium">{{ r.candidate?.name ?? '—' }}</td>
+          <td class="py-3 text-slate-600">{{ r.job?.title ?? '—' }}</td>
+          <td class="py-3 font-bold">{{ r.scoreTotal?.toFixed(1) }}<span class="text-slate-400 text-xs"> /10</span></td>
+          <td class="py-3">
+            <span *ngIf="r.recomendacion === 'avanzar'" class="badge bg-green-100 text-green-800">Avanzar</span>
+            <span *ngIf="r.recomendacion === 'segunda_instancia'" class="badge bg-yellow-100 text-yellow-800">2da instancia</span>
+            <span *ngIf="r.recomendacion === 'descartar'" class="badge bg-red-100 text-red-700">Descartar</span>
+          </td>
+          <td class="py-3 text-right">
+            <a [routerLink]="['/entrevistas', r.interview.id, 'informe']" class="text-primary-600 hover:underline text-sm font-medium">Ver informe →</a>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Recent interviews -->
+  <div class="card">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-semibold">Entrevistas recientes</h2>
+      <a routerLink="/entrevistas" class="text-sm text-primary-600 hover:underline">Ver todas</a>
+    </div>
+    <p *ngIf="interviews.length === 0" class="text-slate-500 text-sm">
+      Todavía no hay entrevistas. Generá un puesto desde link y agendá la primera.
+    </p>
+    <table *ngIf="interviews.length > 0" class="w-full text-sm">
+      <thead class="text-slate-600">
+        <tr class="border-b border-slate-200">
+          <th class="text-left py-2">Candidato</th>
+          <th class="text-left py-2">Puesto</th>
+          <th class="text-left py-2">Estado</th>
+          <th class="text-left py-2">Creada</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr *ngFor="let iv of interviews.slice(0, 8)" class="border-b border-slate-100">
+          <td class="py-3 font-medium">{{ candidateName(iv.candidateId) }}</td>
+          <td class="py-3 text-slate-600">{{ jobTitle(iv.jobId) }}</td>
+          <td class="py-3"><app-status-badge [status]="iv.status"></app-status-badge></td>
+          <td class="py-3 text-slate-500">{{ formatDate(iv.createdAt) }}</td>
+          <td class="py-3 text-right">
+            <a [routerLink]="['/entrevistas', iv.id]" class="text-primary-600 hover:underline text-sm font-medium">Ver →</a>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</ng-container>

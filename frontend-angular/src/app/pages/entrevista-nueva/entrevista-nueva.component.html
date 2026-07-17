@@ -1,0 +1,91 @@
+<!-- Sala created view -->
+<ng-container *ngIf="createdId">
+  <header class="mb-6">
+    <h1 class="text-3xl font-bold text-slate-900">Sala creada</h1>
+  </header>
+  <div class="card max-w-2xl space-y-4">
+    <p class="text-slate-700">Compartí este link con el candidato. Cuando se conecte, leIA iniciará la entrevista automáticamente.</p>
+    <div class="flex items-center gap-2">
+      <input readonly class="input flex-1 font-mono text-sm bg-slate-50" [value]="salaLink" />
+      <button class="btn-secondary shrink-0" (click)="copyLink()">Copiar</button>
+    </div>
+    <div class="flex gap-3 pt-2">
+      <a [routerLink]="['/entrevistas', createdId]" class="btn-primary">Ver entrevista</a>
+      <a routerLink="/entrevistas" class="btn-secondary">Volver a entrevistas</a>
+    </div>
+  </div>
+</ng-container>
+
+<!-- Form view -->
+<ng-container *ngIf="!createdId">
+  <header class="mb-6">
+    <a routerLink="/entrevistas" class="text-sm text-slate-500 hover:text-slate-700">← Volver</a>
+    <h1 class="text-3xl font-bold text-slate-900 mt-2">Agendar entrevista</h1>
+    <p class="text-slate-600 mt-1">Elegí el modo de entrevista: sala en el browser o reunión de Google Meet.</p>
+  </header>
+
+  <div *ngIf="error" class="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-800 text-sm">{{ error }}</div>
+
+  <form (submit)="onSubmit($event)" class="space-y-6 max-w-3xl">
+    <div class="card">
+      <h2 class="text-lg font-semibold mb-3">Modo</h2>
+      <div class="grid grid-cols-2 gap-3">
+        <button type="button" (click)="mode='browser'"
+          [class]="mode === 'browser' ? 'border-primary-500 bg-primary-50' : 'border-slate-200 hover:border-slate-300 bg-white'"
+          class="text-left p-4 rounded-xl border-2 transition-all">
+          <div class="text-2xl mb-1">🌐</div>
+          <div class="font-semibold text-slate-800 text-sm">Sala en el browser</div>
+          <div class="text-xs text-slate-500 mt-0.5">El candidato accede por un link. Sin Google Meet ni bots externos.</div>
+        </button>
+        <button type="button" (click)="mode='meet'"
+          [class]="mode === 'meet' ? 'border-primary-500 bg-primary-50' : 'border-slate-200 hover:border-slate-300 bg-white'"
+          class="text-left p-4 rounded-xl border-2 transition-all">
+          <div class="text-2xl mb-1">📹</div>
+          <div class="font-semibold text-slate-800 text-sm">Google Meet</div>
+          <div class="text-xs text-slate-500 mt-0.5">leIA envía un bot a una reunión de Meet existente.</div>
+        </button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 class="text-lg font-semibold mb-3">Puesto</h2>
+      <p *ngIf="jobs.length === 0" class="text-sm text-slate-500">
+        Necesitás generar un puesto primero.
+        <a routerLink="/puestos/nuevo" class="text-primary-600 hover:underline">Generar puesto desde link</a>
+      </p>
+      <select *ngIf="jobs.length > 0" class="input" [(ngModel)]="jobId" name="jobId">
+        <option *ngFor="let j of jobs" [value]="j.id">{{ j.title }} — {{ j.company }} ({{ j.requirements.seniority }})</option>
+      </select>
+      <div *ngIf="selectedJob" class="mt-3 flex flex-wrap gap-1">
+        <span *ngFor="let s of selectedJob.requirements.stack.slice(0,8)"
+          class="text-xs bg-primary-50 text-primary-700 px-2 py-0.5 rounded">{{ s }}</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 class="text-lg font-semibold mb-3">Candidato</h2>
+      <p *ngIf="candidates.length === 0" class="text-sm text-slate-500">
+        Necesitás crear un candidato primero.
+        <a routerLink="/candidatos/nuevo" class="text-primary-600 hover:underline">Ir a crear candidato</a>
+      </p>
+      <select *ngIf="candidates.length > 0" class="input" [(ngModel)]="candidateId" name="candidateId">
+        <option *ngFor="let c of candidates" [value]="c.id">{{ c.name }} — {{ c.email }}</option>
+      </select>
+      <p *ngIf="selectedCandidate?.notes" class="mt-2 text-xs text-slate-500">{{ selectedCandidate!.notes }}</p>
+    </div>
+
+    <div *ngIf="mode === 'meet'" class="card">
+      <h2 class="text-lg font-semibold mb-3">Enlace de Google Meet</h2>
+      <p class="text-sm text-slate-500 mb-2">Pegá aquí el link de la reunión donde se unirá leIA.</p>
+      <input type="url" class="input w-full" placeholder="https://meet.google.com/abc-defg-hij"
+        [(ngModel)]="meetUrl" name="meetUrl" [required]="mode === 'meet'" />
+    </div>
+
+    <div class="flex items-center gap-3">
+      <button type="submit" class="btn-primary" [disabled]="submitting">
+        {{ submitting ? 'Creando…' : mode === 'browser' ? 'Crear sala' : 'Agendar entrevista' }}
+      </button>
+      <a routerLink="/entrevistas" class="btn-secondary">Cancelar</a>
+    </div>
+  </form>
+</ng-container>
