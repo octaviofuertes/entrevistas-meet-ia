@@ -2,9 +2,15 @@ import { AfterViewChecked, Component, ElementRef, NgZone, OnDestroy, OnInit, Vie
 import { ActivatedRoute } from '@angular/router';
 import { ApiService } from '../../services/api.service';
 
-const WS_URL = 'ws://localhost:4000';
-const API_URL = 'http://localhost:4000';
-const FRONTEND_URL = 'http://localhost:4200';
+// Todo relativo al origen actual (:4200 en dev) para pasar por proxy.conf.json:
+//   '/api'  → http://localhost:4000   ·   '/ws' → ws://localhost:4000
+// Así no hay CORS y funciona igual detrás de cualquier host/https en producción.
+const ORIGIN = typeof location !== 'undefined' ? location.origin : 'http://localhost:4200';
+const WS_URL = typeof location !== 'undefined'
+  ? `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`
+  : 'ws://localhost:4200';
+const API_URL = '';
+const FRONTEND_URL = ORIGIN;
 
 interface SalaInfo {
   interviewId: string; status: string;

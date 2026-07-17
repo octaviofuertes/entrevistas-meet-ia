@@ -7,7 +7,10 @@ import type {
   Evaluation, InterviewTurn, TranscriptFragment, TTSDriver,
 } from '../models/types';
 
-const API_URL = 'http://localhost:4000';
+// Vacío a propósito: las rutas quedan relativas ('/api/...') y las sirve el
+// dev-server de Angular vía proxy.conf.json → backend :4000. Mismo origen que
+// :4200, así que no hay CORS. No pongas la URL absoluta del backend acá.
+const API_URL = '';
 const TOKEN = 'admin-demo-token-cambiar';
 
 @Injectable({ providedIn: 'root' })

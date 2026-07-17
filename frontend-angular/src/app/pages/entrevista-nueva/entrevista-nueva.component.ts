@@ -3,7 +3,7 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { ApiService } from '../../services/api.service';
 import type { Candidate, Job } from '../../models/types';
 
-const FRONTEND_URL = 'http://localhost:4200';
+const FRONTEND_URL = typeof location !== 'undefined' ? location.origin : 'http://localhost:4200';
 
 @Component({
   selector: 'app-entrevista-nueva',

@@ -16,7 +16,7 @@ const ConfigSchema = z.object({
   JWT_EXPIRES_IN: z.string().default('24h'),
   ADMIN_TOKEN: z.string().default('admin-demo-token-cambiar'),
 
-  CORS_ORIGIN: z.string().default('http://localhost:3000'),
+  CORS_ORIGIN: z.string().default('http://localhost:3000,http://localhost:4200'),
 
   DATABASE_DRIVER: z.enum(['memory', 'postgres']).default('memory'),
   DATABASE_URL: z.string().default('postgresql://entrevistas:entrevistas@localhost:5432/entrevistas'),

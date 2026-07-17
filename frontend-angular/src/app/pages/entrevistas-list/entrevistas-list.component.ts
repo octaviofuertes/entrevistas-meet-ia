@@ -2,7 +2,8 @@ import { Component, OnInit } from '@angular/core';
 import { ApiService } from '../../services/api.service';
 import type { Interview, Candidate, Job } from '../../models/types';
 
-const API_URL = 'http://localhost:4000';
+// Relativo → proxy.conf.json lo enruta al backend :4000 (mismo origen, sin CORS).
+const API_URL = '';
 
 @Component({
   selector: 'app-entrevistas-list',

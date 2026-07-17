@@ -4,8 +4,9 @@ import { ApiService } from '../../services/api.service';
 import { ALL_DIMENSIONS, DIMENSION_LABELS } from '../../models/types';
 import type { InterviewDetail, TTSDriver } from '../../models/types';
 
-const FRONTEND_URL = 'http://localhost:4200';
-const API_URL = 'http://localhost:4000';
+const FRONTEND_URL = typeof location !== 'undefined' ? location.origin : 'http://localhost:4200';
+// Relativo → proxy.conf.json enruta '/api/...' al backend :4000 (sin CORS).
+const API_URL = '';
 
 const TTS_OPTIONS: Array<{ value: TTSDriver; label: string }> = [
   { value: 'gemini', label: 'Gemini TTS' },
