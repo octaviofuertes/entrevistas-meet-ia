@@ -20,9 +20,6 @@ import { EmpresaDetailComponent } from './pages/empresa-detail/empresa-detail.co
 import { PuestosListComponent } from './pages/puestos-list/puestos-list.component';
 import { PuestosNuevoComponent } from './pages/puestos-nuevo/puestos-nuevo.component';
 import { PuestoDetailComponent } from './pages/puesto-detail/puesto-detail.component';
-import { CandidatosListComponent } from './pages/candidatos-list/candidatos-list.component';
-import { CandidatoNuevoComponent } from './pages/candidato-nuevo/candidato-nuevo.component';
-import { CompararComponent } from './pages/comparar/comparar.component';
 import { EntrevistasListComponent } from './pages/entrevistas-list/entrevistas-list.component';
 import { EntrevistaNuevaComponent } from './pages/entrevista-nueva/entrevista-nueva.component';
 import { EntrevistaDetailComponent } from './pages/entrevista-detail/entrevista-detail.component';
@@ -43,9 +40,6 @@ import { SalaComponent } from './pages/sala/sala.component';
     PuestosListComponent,
     PuestosNuevoComponent,
     PuestoDetailComponent,
-    CandidatosListComponent,
-    CandidatoNuevoComponent,
-    CompararComponent,
     EntrevistasListComponent,
     EntrevistaNuevaComponent,
     EntrevistaDetailComponent,

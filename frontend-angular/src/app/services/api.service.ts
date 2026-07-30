@@ -2,9 +2,10 @@ import { Injectable } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import type {
-  Job, Company, CompanyType, Candidate, CandidateRanking,
-  CvScreening, Interview, InterviewDetail, Report, ReportKind,
+  Job, Company, CompanyType, Candidate,
+  Interview, InterviewDetail, Report, ReportKind,
   Evaluation, InterviewTurn, TranscriptFragment, TTSDriver,
+  JobQuestion, Application, ApplicationWithCandidate,
 } from '../models/types';
 
 // Vacío a propósito: las rutas quedan relativas ('/api/...') y las sirve el
@@ -33,6 +34,12 @@ export class ApiService {
   private post<T>(path: string, body?: unknown): Promise<T> {
     return firstValueFrom(
       this.http.post<T>(`${API_URL}${path}`, body ?? null, { headers: this.headers() })
+    );
+  }
+
+  private put<T>(path: string, body: unknown): Promise<T> {
+    return firstValueFrom(
+      this.http.put<T>(`${API_URL}${path}`, body, { headers: this.headers() })
     );
   }
 
@@ -106,27 +113,61 @@ export class ApiService {
     return this.post<Job>('/api/jobs/from-form', data);
   }
 
+  // ---- RF-02: banco de preguntas generado por IA ----
+  apiGetJobQuestions(jobId: string): Promise<JobQuestion[]> {
+    return this.get<{ data: JobQuestion[] }>(`/api/jobs/${jobId}/questions`).then(r => r.data);
+  }
+
+  /** Reemplaza el banco completo: sirve para editar, eliminar y reordenar. */
+  apiSaveJobQuestions(jobId: string, questions: JobQuestion[]): Promise<JobQuestion[]> {
+    return this.put<{ data: JobQuestion[] }>(`/api/jobs/${jobId}/questions`, { questions }).then(r => r.data);
+  }
+
+  apiRegenerateJobQuestions(jobId: string): Promise<JobQuestion[]> {
+    return this.post<{ data: JobQuestion[] }>(`/api/jobs/${jobId}/questions/regenerate`, {}).then(r => r.data);
+  }
+
+  // ---- RF-01/RF-03/RF-04: postulaciones (CV → candidato + match) ----
+  apiListApplications(jobId: string): Promise<ApplicationWithCandidate[]> {
+    return this.get<{ data: ApplicationWithCandidate[] }>(`/api/jobs/${jobId}/applications`).then(r => r.data);
+  }
+
+  /** Sube un CV (PDF/DOCX) al puesto: alta automática del candidato + match. */
+  apiUploadCvToJob(
+    jobId: string,
+    file: File
+  ): Promise<{ candidate: Candidate; application: Application }> {
+    const headers = new HttpHeaders({
+      'Content-Type': file.type || 'application/octet-stream',
+      Authorization: `Bearer ${TOKEN}`,
+      'x-file-name': file.name,
+    });
+    return firstValueFrom(
+      this.http.post<{ candidate: Candidate; application: Application }>(
+        `${API_URL}/api/jobs/${jobId}/applications`,
+        file,
+        { headers }
+      )
+    );
+  }
+
+  apiDeleteApplication(jobId: string, applicationId: string): Promise<void> {
+    return this.delete<void>(`/api/jobs/${jobId}/applications/${applicationId}`);
+  }
+
   apiDeleteJob(id: string): Promise<void> {
     return this.delete<void>(`/api/jobs/${id}`);
   }
 
-  apiRankCandidates(jobId: string, candidateIds: string[]): Promise<{ rankings: CandidateRanking[] }> {
-    return this.post<{ rankings: CandidateRanking[] }>(`/api/jobs/${jobId}/rank-candidates`, { candidateIds });
-  }
-
   // ── Candidates ──────────────────────────────────────────────────────────────
+  // El alta de candidatos ocurre por apiUploadCvToJob (RF-01/RF-03): el CV se
+  // sube a la vacante y leIA crea el perfil. No hay carga manual.
   apiListCandidates(): Promise<Candidate[]> {
     return this.get<{ data: Candidate[] }>('/api/candidates').then(r => r.data);
   }
 
   apiGetCandidate(id: string): Promise<Candidate> {
     return this.get<Candidate>(`/api/candidates/${id}`);
-  }
-
-  apiCreateCandidate(data: {
-    email: string; name: string; phone?: string; cvUrl?: string; notes?: string;
-  }): Promise<Candidate> {
-    return this.post<Candidate>('/api/candidates', data);
   }
 
   apiDeleteCandidate(id: string): Promise<void> {

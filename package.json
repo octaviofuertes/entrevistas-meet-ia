@@ -4,17 +4,16 @@
   "private": true,
   "description": "Sistema de Entrevistas Automatizadas con Inteligencia Artificial (leIA)",
   "workspaces": [
-    "backend",
-    "frontend"
+    "backend"
   ],
   "scripts": {
-    "install:all": "npm install && npm install --workspace=backend && npm install --workspace=frontend",
+    "install:all": "npm install && npm install --workspace=backend && npm --prefix frontend-angular install",
     "dev": "npm-run-all --parallel dev:backend dev:frontend",
     "dev:backend": "npm run dev --workspace=backend",
-    "dev:frontend": "npm run dev --workspace=frontend",
-    "build": "npm run build --workspace=backend && npm run build --workspace=frontend",
+    "dev:frontend": "npm --prefix frontend-angular run start",
+    "build": "npm run build --workspace=backend && npm --prefix frontend-angular run build",
     "start:backend": "npm run start --workspace=backend",
-    "start:frontend": "npm run start --workspace=frontend",
+    "start:frontend": "npm --prefix frontend-angular run start",
     "seed": "npm run seed --workspace=backend"
   },
   "devDependencies": {

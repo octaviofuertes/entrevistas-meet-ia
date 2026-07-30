@@ -21,3 +21,6 @@ gcp-credentials*.json
 
 # Tunnel binary (download locally, ~50MB)
 backend/cloudflared.exe
+
+# Grabaciones de entrevistas (archivos binarios grandes, no van en git)
+backend/recordings/

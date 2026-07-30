@@ -54,6 +54,22 @@ export interface JobPreferences {
   behavioralAnalysisEnabled?: boolean;
 }
 
+// ---- RF-02: banco de preguntas generado automáticamente por IA ----
+export type JobQuestionKind = 'tecnica' | 'situacional' | 'descarte';
+
+export interface JobQuestion {
+  id: UUID;
+  text: string;
+  kind: JobQuestionKind;
+  source: 'ia' | 'manual';
+}
+
+export const QUESTION_KIND_LABELS: Record<JobQuestionKind, string> = {
+  tecnica: 'Técnica',
+  situacional: 'Situacional',
+  descarte: 'Descarte',
+};
+
 export type JobModality = 'presencial' | 'hibrido' | 'remoto';
 export type JobHiringStatus = 'abierto' | 'pausado' | 'cerrado';
 export type CompanyType = 'privada' | 'publica' | 'mixta';
@@ -80,6 +96,8 @@ export interface Job {
   description: string;
   requirements: JobRequirements;
   preferences: JobPreferences;
+  /** RF-02: banco de preguntas generado por IA al guardar el puesto. */
+  questions: JobQuestion[];
   rawText?: string | null;
   publishedAt?: string | null;
   location?: string | null;
@@ -91,41 +109,93 @@ export interface Job {
   updatedAt: string;
 }
 
-export type CvRecommendation = 'contratar' | 'entrevistar' | 'descartar';
+// Los tipos del ranking manual de CVs (CandidateRanking / CvScreening) se
+// eliminaron: el scoring de candidatos ahora vive en Application (RF-04),
+// calculado automáticamente al subir el CV a la vacante.
 
-export interface CandidateRanking {
-  candidateId: string;
-  candidateName: string;
-  score: number;
-  recommendation: CvRecommendation;
-  summary: string;
-  strengths: string[];
-  weaknesses: string[];
+// ---- RF-03: ficha resumen extraída del CV ----
+export type LanguageLevel = 'A1' | 'A2' | 'B1' | 'B2' | 'C1' | 'C2' | 'Nativo';
+
+export interface CandidateLanguage {
+  idioma: string;
+  nivel: LanguageLevel;
 }
 
-export interface CvScreening {
-  id: UUID;
-  jobId: UUID;
-  fileName: string;
-  score: number;
-  recommendation: CvRecommendation;
-  summary: string;
-  strengths: string[];
-  weaknesses: string[];
-  createdAt: string;
+export interface CandidateTimelineEntry {
+  empresa: string;
+  rol: string;
+  desde: string;
+  hasta: string;
+  meses: number;
+  liderazgo?: boolean;
+}
+
+export interface CandidateProfile {
+  tituloAcademico: string | null;
+  conocimientos: string[];
+  herramientas: string[];
+  idiomas: CandidateLanguage[];
+  timeline: CandidateTimelineEntry[];
+  experienciaTotalAnios: number;
+  experienciaRelevanteAnios: number;
 }
 
 export interface Candidate {
   id: UUID;
   email: string;
   name: string;
+  lastName?: string | null;
   phone?: string | null;
+  dni?: string | null;
+  birthDate?: string | null;
+  age?: number | null;
+  location?: string | null;
   cvUrl?: string | null;
   cvText?: string | null;
+  profile?: CandidateProfile | null;
   notes?: string | null;
   createdAt: string;
   updatedAt: string;
 }
+
+// ---- RF-04: matching y detección de patrones ----
+export interface MatchBreakdown {
+  hardSkills: number;
+  experiencia: number;
+  ubicacionModalidad: number;
+  educacion: number;
+}
+
+export interface RiskPatterns {
+  rotacionAlta: boolean;
+  rotacionDetalle: string;
+  nivelResponsabilidad: 'sin_datos' | 'individual' | 'lider_proyecto' | 'gente_a_cargo';
+  responsabilidadDetalle: string;
+  gaps: string[];
+}
+
+export interface Application {
+  id: UUID;
+  jobId: UUID;
+  candidateId: UUID;
+  matchPercent: number;
+  breakdown: MatchBreakdown;
+  patterns: RiskPatterns;
+  resumenEjecutivo: string;
+  createdAt: string;
+}
+
+/** Postulación con el candidato embebido (respuesta de GET /api/jobs/:id/applications). */
+export interface ApplicationWithCandidate extends Application {
+  candidate: Candidate | null;
+}
+
+export const RESPONSABILIDAD_LABELS: Record<RiskPatterns['nivelResponsabilidad'], string> = {
+  sin_datos: 'Sin datos',
+  individual: 'Colaborador individual',
+  lider_proyecto: 'Líder de proyecto',
+  gente_a_cargo: 'Gente a cargo',
+};
 
 export type InterviewStatus =
   | 'pendiente'

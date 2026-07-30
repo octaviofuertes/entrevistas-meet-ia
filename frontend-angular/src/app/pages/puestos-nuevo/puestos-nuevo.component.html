@@ -108,6 +108,16 @@
     </div>
   </div>
 
+  <!-- RF-02: las preguntas ya no se cargan a mano. Al guardar el puesto, leIA
+       genera automáticamente el banco de 5 a 10 preguntas y se editan desde la
+       ficha del puesto. -->
+  <div class="p-3 rounded-lg bg-primary-50 border border-primary-200 text-sm text-primary-900">
+    <span class="font-medium">Preguntas de la entrevista:</span>
+    al guardar, leIA genera automáticamente entre 5 y 10 preguntas (técnicas, situacionales y de
+    descarte) a partir del stack, las responsabilidades y los requisitos excluyentes. Vas a poder
+    revisarlas, editarlas o regenerarlas desde la ficha del puesto.
+  </div>
+
   <div class="grid grid-cols-2 gap-4">
     <label class="flex items-center gap-2 text-sm">
       <input type="checkbox" [(ngModel)]="report1" name="report1" />

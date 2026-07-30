@@ -42,9 +42,10 @@ proveedor externo correspondiente para su evaluación — no es una limitación
 ## Qué hay adentro
 
 - **Backend** Fastify + WebSockets + TypeScript.
-- **Frontend** Next.js 14 + Tailwind: `/puestos` (desde link o desde
-  formulario), `/candidatos`, `/entrevistas` (listado, detalle, sala nativa e
-  informe), `/sala/[id]` (la sala web propia del candidato).
+- **Frontend** Angular 15 + Tailwind: `/puestos` (desde link o formulario, con
+  banco de preguntas generado por IA, carga de CVs y ranking de postulantes),
+  `/empresas`, `/entrevistas` (listado, detalle, sala nativa e informe),
+  `/sala/[id]` (la sala web propia del candidato).
 - **Persistencia** PostgreSQL (con `docker-compose`) o memoria.
 - **Drivers** intercambiables por env:
   - `LEIA_DRIVER` = `mock` (default) · `gemini` · `claude`
@@ -97,7 +98,7 @@ cp .env.example .env
 npm run dev
 ```
 
-Después abrís http://localhost:3000.
+Después abrís http://localhost:4200.
 
 Por defecto todo es mock: ni API key, ni Meet real, ni costo. El motor genera
 puestos desde un link o desde un formulario, agenda entrevistas (sala nativa
@@ -212,12 +213,15 @@ backend/
       interview/engine.ts     Orquesta el ciclo de la entrevista (ambos canales)
     routes/                   jobs · candidates · interviews · leia · reports
     realtime/                 ws de entrevista + webhook de Recall.ai + bot-stage + sala nativa
-frontend/
-  app/
-    puestos/                  desde link o formulario + listado/detalle
-    candidatos/
-    entrevistas/              listado + detalle (con selector de voz) + informe único
-    sala/[id]/                sala nativa del candidato (sin Meet)
+frontend-angular/
+  src/app/
+    pages/
+      puestos/                desde link o formulario + detalle (preguntas IA, CVs, ranking)
+      empresas/
+      entrevistas/            listado + detalle (con selector de voz) + informe
+      sala/                   sala nativa del candidato (sin Meet)
+    services/api.service.ts   cliente REST/WS
+    models/types.ts           tipos compartidos
 docker-compose.yml            Postgres
 ```
 

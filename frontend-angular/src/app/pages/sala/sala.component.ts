@@ -97,6 +97,13 @@ export class SalaComponent implements OnInit, OnDestroy, AfterViewChecked {
   private audioCtx:     AudioContext | null = null;
   private masterGain:   GainNode | null = null;
   private leiaAudioDest: MediaStreamAudioDestinationNode | null = null;
+  // leIA se reproduce por un <audio> alimentado por este MediaStreamDestination:
+  // así el cancelador de eco (AEC) del navegador conoce la salida de leIA y la
+  // cancela del micrófono. Enrutar Web Audio directo a ctx.destination NO pasa
+  // por el AEC → el candidato escucha eco de su propia voz al hablar.
+  private speakerDest:  MediaStreamAudioDestinationNode | null = null;
+  private leiaAudioEl:  HTMLAudioElement | null = null;
+  private drainTimer:   any = null;
 
   private decodeChain:   Promise<void> = Promise.resolve();
   private nextStartTime  = 0;
@@ -118,6 +125,8 @@ export class SalaComponent implements OnInit, OnDestroy, AfterViewChecked {
   private silenceTimer:  any = null;
   private finalBuf       = '';
   private readonly SILENCE_MS = 2000;
+  /** Gracia tras agotarse el audio antes de volver el avatar a idle (bridge de chunks). */
+  private readonly DRAIN_GRACE_MS = 200;
 
   constructor(
     private route: ActivatedRoute,
@@ -152,9 +161,11 @@ export class SalaComponent implements OnInit, OnDestroy, AfterViewChecked {
     window.removeEventListener('beforeunload', this.onUnload);
     if (this.timerInt) clearInterval(this.timerInt);
     if (this.dotsInt)  clearInterval(this.dotsInt);
+    if (this.drainTimer) { clearTimeout(this.drainTimer); this.drainTimer = null; }
     this.ws?.close();
     this.streamRef?.getTracks().forEach(t => t.stop());
     this.lobbyStream?.getTracks().forEach(t => t.stop());
+    if (this.leiaAudioEl) { this.leiaAudioEl.pause(); this.leiaAudioEl.srcObject = null; this.leiaAudioEl.remove(); this.leiaAudioEl = null; }
     this.audioCtx?.close().catch(() => {});
     this.stopRecognition();
   }
@@ -163,13 +174,23 @@ export class SalaComponent implements OnInit, OnDestroy, AfterViewChecked {
   ngAfterViewChecked() {
     const str = this.currentStream;
     if (this.phase === 'lobby' && this.lobbyVidRef && str) {
-      if (this.lobbyVidRef.nativeElement.srcObject !== str)
-        this.lobbyVidRef.nativeElement.srcObject = str;
+      this.attachSelfView(this.lobbyVidRef.nativeElement, str);
     }
     if (this.phase === 'running' && this.pipVidRef && str) {
-      if (this.pipVidRef.nativeElement.srcObject !== str)
-        this.pipVidRef.nativeElement.srcObject = str;
+      this.attachSelfView(this.pipVidRef.nativeElement, str);
     }
+  }
+
+  /**
+   * Asigna el stream al self-view SIN que suene nunca. El atributo `muted` del
+   * HTML no siempre se respeta al setear srcObject por JS, así que forzamos las
+   * PROPIEDADES muted/volume del elemento. Sumado a que el stream es video-only
+   * (ver joinCall), el candidato jamás se escucha a sí mismo.
+   */
+  private attachSelfView(el: HTMLVideoElement, str: MediaStream) {
+    el.muted = true;
+    el.volume = 0;
+    if (el.srcObject !== str) el.srcObject = str;
   }
 
   private onUnload = () => navigator.sendBeacon(`${API_URL}/api/sala/${this.interviewId}/finalize`);
@@ -231,6 +252,9 @@ export class SalaComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   // ── Playback ──────────────────────────────────────────────────────────────
   private enterSpeakingUI() {
+    // Llega audio nuevo: cancelamos cualquier vuelta-a-idle pendiente.
+    if (this.drainTimer) { clearTimeout(this.drainTimer); this.drainTimer = null; }
+    if (this._leiaSpeaking) return; // ya en modo hablando (idempotente entre chunks)
     this._leiaSpeaking = true;
     this.zone.run(() => { this.leiaSpeaking = true; this.leiaThinking = false; });
     this.stopRecognition();
@@ -239,15 +263,33 @@ export class SalaComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (talk) { talk.style.display = 'block'; talk.currentTime = 0; talk.play().catch(() => {}); }
   }
 
-  private drainPlayback() {
-    if (this.leiaStreaming) return;
+  /**
+   * El último source de audio terminó. En vez de saltar a idle de una (lo que
+   * parpadea el avatar entre chunks), esperamos una ventana de gracia: si llega
+   * más audio seguimos hablando; si no, el avatar vuelve a idle. Así el avatar
+   * sigue el audio REAL y no la señal leiaStreaming del backend, que puede
+   * quedar activa dejando el video "hablando" sin sonido.
+   */
+  private scheduleDrain() {
+    if (this.drainTimer) return;
+    this.drainTimer = setTimeout(() => {
+      this.drainTimer = null;
+      if (this.activeSources.size > 0) return; // el audio se reanudó
+      this.goIdle();
+    }, this.DRAIN_GRACE_MS);
+  }
+
+  private goIdle() {
+    if (this.drainTimer) { clearTimeout(this.drainTimer); this.drainTimer = null; }
     this._leiaSpeaking = false;
     this.zone.run(() => { this.leiaSpeaking = false; });
     this.nextStartTime = 0;
     const idle = this.idleVidRef?.nativeElement, talk = this.talkVidRef?.nativeElement;
     if (idle) { idle.style.display = 'block'; idle.play().catch(() => {}); }
     if (talk) { talk.style.display = 'none'; talk.pause(); }
-    if (this._micOn) this.startRecognition();
+    // Rehabilitamos el mic sólo si el backend ya terminó de mandar audio de este
+    // turno (leiaStreaming=false). Si sigue streameando, lo hará speaking_done.
+    if (!this.leiaStreaming && this._micOn && this._phase === 'running') this.startRecognition();
   }
 
   private stopPlayback() {
@@ -280,7 +322,7 @@ export class SalaComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.activeSources.add(source);
       source.onended = () => {
         this.activeSources.delete(source);
-        if (this.activeSources.size === 0) this.drainPlayback();
+        if (this.activeSources.size === 0) this.scheduleDrain();
       };
       source.start(startAt);
     });
@@ -321,8 +363,21 @@ export class SalaComponent implements OnInit, OnDestroy, AfterViewChecked {
     const ctx = new ((window as any).AudioContext ?? (window as any).webkitAudioContext)() as AudioContext;
     if (ctx.state === 'suspended') await ctx.resume();
     this.audioCtx = ctx;
-    const gain = ctx.createGain(); gain.connect(ctx.destination);
+    const gain = ctx.createGain();
     this.masterGain = gain;
+    // leIA NO va directo a ctx.destination (bypassea el AEC → eco). Va a un
+    // MediaStreamDestination reproducido por un <audio>, que el AEC sí cancela.
+    const speakerDest = ctx.createMediaStreamDestination();
+    gain.connect(speakerDest);
+    this.speakerDest = speakerDest;
+    const audioEl = new Audio();
+    audioEl.srcObject = speakerDest.stream;
+    audioEl.autoplay = true;
+    (audioEl as any).playsInline = true;
+    audioEl.style.display = 'none';
+    document.body.appendChild(audioEl); // adjunto al DOM: reproducción confiable del MediaStream
+    audioEl.play().catch(() => {});
+    this.leiaAudioEl = audioEl;
 
     this.zone.run(() => this.setPhase('running'));
 
@@ -334,7 +389,12 @@ export class SalaComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.streamRef = stream;
       stream.getVideoTracks().forEach(t => (t.enabled = this._cameraOn));
       stream.getAudioTracks().forEach(t => (t.enabled = this._micOn));
-      this.zone.run(() => { this.currentStream = stream; });
+      // El self-view (PiP) recibe SÓLO la pista de video: sin pista de audio, el
+      // candidato no puede escucharse a sí mismo pase lo que pase con el atributo
+      // `muted` del <video>. El audio real del micrófono vive en streamRef (para
+      // la grabación) y nunca se rutea a un elemento que suene.
+      const displayStream = new MediaStream(stream.getVideoTracks());
+      this.zone.run(() => { this.currentStream = displayStream; });
       if (this.info?.voiceMode === 'live') this.startCandidateAudioCapture(stream);
     } catch {}
 
@@ -354,11 +414,17 @@ export class SalaComponent implements OnInit, OnDestroy, AfterViewChecked {
         if (msg.type === 'audio')       this.enqueueAudio(msg.audioBase64);
         if (msg.type === 'question')    this.zone.run(() => this.subtitle = msg.text ?? '');
         if (msg.type === 'status' && msg.status === 'en_curso') this.zone.run(() => this.leiaThinking = true);
-        if (msg.type === 'stop_audio')  { this.leiaStreaming = false; this.stopPlayback(); }
+        if (msg.type === 'stop_audio')  {
+          this.leiaStreaming = false;
+          this.stopPlayback();
+          this.goIdle(); // barge-in: cortar el avatar de una
+        }
         if (msg.type === 'speaking_start') this.leiaStreaming = true;
         if (msg.type === 'speaking_done') {
           this.leiaStreaming = false;
-          if (this.activeSources.size === 0) this.drainPlayback();
+          // Backend terminó de mandar audio del turno: si ya no suena nada,
+          // avatar a idle + mic habilitado; si sigue sonando, lo hará el drain.
+          if (this.activeSources.size === 0) this.goIdle();
         }
         if (msg.type === 'finished')    this.endCall();
         if (msg.type === 'report_ready') this.zone.run(() => {
@@ -441,7 +507,10 @@ export class SalaComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.stopRecognition();
     if (this.timerInt) { clearInterval(this.timerInt); this.timerInt = null; }
     this.stopPlayback();
+    if (this.drainTimer) { clearTimeout(this.drainTimer); this.drainTimer = null; }
     if (this.recorder) await this.stopRecording(true);
+    if (this.leiaAudioEl) { this.leiaAudioEl.pause(); this.leiaAudioEl.srcObject = null; this.leiaAudioEl.remove(); this.leiaAudioEl = null; }
+    this.speakerDest = null;
     this.audioCtx?.close().catch(() => {});
     this.stopCandidateAudioCapture();
     this.streamRef?.getTracks().forEach(t => t.stop());

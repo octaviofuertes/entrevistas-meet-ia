@@ -180,7 +180,7 @@ Esperado en producción:
 Recomendado:
 
 - Backend: Cloud Run / Fly.io / cualquier host Node 18+.
-- Frontend: Vercel.
+- Frontend (Angular): build estático servido por Netlify / Vercel / cualquier host de estáticos (o Nginx).
 - Postgres: Cloud SQL / RDS / Supabase.
 - Webhook de Recall.ai apuntando al backend público (solo si usás el canal Meet).
 
@@ -189,7 +189,7 @@ Build:
 ```bash
 npm run build
 # backend: node dist/server.js  (ejecutar desde backend/, o pasar --env-file si corrés desde la raíz)
-# frontend: next start -p 3000
+# frontend: build en frontend-angular/dist/ (servir como estáticos; en dev: npm --prefix frontend-angular run start → :4200)
 ```
 
 ## Troubleshooting

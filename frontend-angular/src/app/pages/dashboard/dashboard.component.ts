@@ -15,7 +15,6 @@ interface Ranked {
   templateUrl: './dashboard.component.html',
 })
 export class DashboardComponent implements OnInit {
-  health: any = null;
   candidates: Candidate[] = [];
   interviews: Interview[] = [];
   jobs: Job[] = [];
@@ -27,13 +26,11 @@ export class DashboardComponent implements OnInit {
 
   async ngOnInit() {
     try {
-      const [h, c, i, j] = await Promise.all([
-        this.api.apiHealth(),
+      const [c, i, j] = await Promise.all([
         this.api.apiListCandidates(),
         this.api.apiListInterviews(),
         this.api.apiListJobs(),
       ]);
-      this.health = h;
       this.candidates = c;
       this.interviews = i;
       this.jobs = j;
@@ -62,10 +59,6 @@ export class DashboardComponent implements OnInit {
     } finally {
       this.loading = false;
     }
-  }
-
-  isReal(value: string): boolean {
-    return value !== 'mock' && value !== 'memory';
   }
 
   formatDate(d: string): string {

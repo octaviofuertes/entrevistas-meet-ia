@@ -65,8 +65,9 @@
     <div class="card">
       <h2 class="text-lg font-semibold mb-3">Candidato</h2>
       <p *ngIf="candidates.length === 0" class="text-sm text-slate-500">
-        Necesitás crear un candidato primero.
-        <a routerLink="/candidatos/nuevo" class="text-primary-600 hover:underline">Ir a crear candidato</a>
+        Todavía no hay candidatos. Subí los CVs desde
+        <a routerLink="/puestos" class="text-primary-600 hover:underline">la ficha del puesto</a>
+        y leIA los da de alta automáticamente.
       </p>
       <select *ngIf="candidates.length > 0" class="input" [(ngModel)]="candidateId" name="candidateId">
         <option *ngFor="let c of candidates" [value]="c.id">{{ c.name }} — {{ c.email }}</option>

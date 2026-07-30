@@ -27,6 +27,7 @@ export class PuestosNuevoComponent implements OnInit {
   report1 = true;
   report2 = true;
 
+
   busy = false;
   error: string | null = null;
 

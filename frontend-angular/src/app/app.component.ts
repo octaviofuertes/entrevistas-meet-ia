@@ -5,8 +5,6 @@ const NAV = [
   { href: '/', label: 'Dashboard', icon: 'D' },
   { href: '/empresas', label: 'Empresas', icon: 'Em' },
   { href: '/puestos', label: 'Puestos', icon: 'P' },
-  { href: '/candidatos', label: 'Candidatos', icon: 'C' },
-  { href: '/comparar', label: 'Comparar CVs', icon: 'CV' },
   { href: '/entrevistas', label: 'Entrevistas', icon: 'E' },
 ];
 

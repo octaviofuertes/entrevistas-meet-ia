@@ -16,44 +16,17 @@
 <div *ngIf="loading" class="text-slate-500">Cargando...</div>
 
 <ng-container *ngIf="!loading">
-  <!-- Health -->
-  <div *ngIf="health" class="mb-8 card">
-    <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold">Estado del sistema</h2>
-      <span class="badge" [class]="health.demoMode ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'">
-        {{ health.demoMode ? 'Modo demo' : 'Producción' }}
-      </span>
-    </div>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-      <div class="p-3 rounded-lg bg-slate-50" *ngFor="let d of [
-        {label:'Base de datos', value: health.drivers.database},
-        {label:'leIA', value: health.drivers.leia},
-        {label:'Recall.ai', value: health.drivers.recall},
-        {label:'ElevenLabs TTS', value: health.drivers.tts}
-      ]">
-        <div class="text-xs text-slate-500 mb-1">{{ d.label }}</div>
-        <div class="flex items-center gap-2">
-          <span class="w-2 h-2 rounded-full" [class]="isReal(d.value) ? 'bg-green-500' : 'bg-yellow-500'"></span>
-          <span class="font-medium capitalize">{{ d.value }}</span>
-        </div>
-      </div>
-    </div>
-    <p *ngIf="health.demoMode" class="mt-4 text-xs text-slate-500">
-      Modo demo: leIA, Recall.ai y ElevenLabs están en mock. Configurá las API keys en
-      <code class="bg-slate-100 px-1 rounded">.env</code> para activar drivers reales.
-    </p>
-  </div>
-
   <!-- Stat cards -->
   <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
     <a routerLink="/puestos" class="card hover:shadow-md transition-shadow block">
       <div class="text-3xl font-bold text-slate-900">{{ jobs.length }}</div>
       <div class="text-sm text-slate-500">Puestos</div>
     </a>
-    <a routerLink="/candidatos" class="card hover:shadow-md transition-shadow block">
+    <!-- Sin link: los candidatos se consultan dentro de cada puesto. -->
+    <div class="card">
       <div class="text-3xl font-bold text-slate-900">{{ candidates.length }}</div>
       <div class="text-sm text-slate-500">Candidatos</div>
-    </a>
+    </div>
     <a routerLink="/entrevistas" class="card hover:shadow-md transition-shadow block">
       <div class="text-3xl font-bold text-slate-900">{{ interviews.length }}</div>
       <div class="text-sm text-slate-500">Entrevistas</div>
