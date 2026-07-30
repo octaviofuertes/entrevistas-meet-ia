@@ -4,7 +4,10 @@ import { MemoryDb } from './memory';
 import { PostgresDb } from './postgres';
 import type {
   Job,
+  Company,
   Candidate,
+  Application,
+  CvScreening,
   Interview,
   InterviewTurn,
   TranscriptFragment,
@@ -17,6 +20,13 @@ import type {
 
 export interface Database {
   init(): Promise<void>;
+
+  // Companies
+  listCompanies(): Promise<Company[]>;
+  getCompany(id: UUID): Promise<Company | null>;
+  createCompany(c: Company): Promise<Company>;
+  updateCompany(id: UUID, patch: Partial<Company>): Promise<Company | null>;
+  deleteCompany(id: UUID): Promise<boolean>;
 
   // Jobs
   listJobs(): Promise<Job[]>;
@@ -32,6 +42,12 @@ export interface Database {
   createCandidate(c: Candidate): Promise<Candidate>;
   updateCandidate(id: UUID, patch: Partial<Candidate>): Promise<Candidate | null>;
   deleteCandidate(id: UUID): Promise<boolean>;
+
+  // Applications (RF-01/RF-04): vinculan un candidato a una vacante + match
+  listApplications(filter?: { jobId?: UUID; candidateId?: UUID }): Promise<Application[]>;
+  getApplication(jobId: UUID, candidateId: UUID): Promise<Application | null>;
+  createApplication(a: Application): Promise<Application>;
+  deleteApplication(id: UUID): Promise<boolean>;
 
   // Interviews
   listInterviews(filter?: {
@@ -61,6 +77,11 @@ export interface Database {
   getReport(interviewId: UUID, kind: ReportKind): Promise<Report | null>;
   listReports(interviewId: UUID): Promise<Report[]>;
   createReport(r: Report): Promise<Report>;
+
+  // CV Screenings
+  listCvScreenings(jobId: UUID): Promise<CvScreening[]>;
+  createCvScreening(s: CvScreening): Promise<CvScreening>;
+  deleteCvScreening(id: UUID): Promise<boolean>;
 
   // Audit
   log(entry: AuditLog): Promise<void>;

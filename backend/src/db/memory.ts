@@ -1,7 +1,10 @@
 import type { Database } from './index';
 import type {
   Job,
+  Company,
   Candidate,
+  Application,
+  CvScreening,
   Interview,
   InterviewTurn,
   TranscriptFragment,
@@ -13,8 +16,11 @@ import type {
 } from '../types';
 
 export class MemoryDb implements Database {
+  private companies = new Map<UUID, Company>();
   private jobs = new Map<UUID, Job>();
   private candidates = new Map<UUID, Candidate>();
+  private applications = new Map<UUID, Application>();
+  private cvScreenings = new Map<UUID, CvScreening>();
   private interviews = new Map<UUID, Interview>();
   private turns = new Map<UUID, InterviewTurn>();
   private transcripts: TranscriptFragment[] = [];
@@ -25,6 +31,32 @@ export class MemoryDb implements Database {
   async init() {
     const { seedDb } = await import('./seed');
     await seedDb(this);
+  }
+
+  // -------------------- Companies --------------------
+  async listCompanies() {
+    return Array.from(this.companies.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async getCompany(id: UUID) {
+    return this.companies.get(id) ?? null;
+  }
+
+  async createCompany(c: Company) {
+    this.companies.set(c.id, c);
+    return c;
+  }
+
+  async updateCompany(id: UUID, patch: Partial<Company>) {
+    const existing = this.companies.get(id);
+    if (!existing) return null;
+    const updated: Company = { ...existing, ...patch, updatedAt: new Date().toISOString() };
+    this.companies.set(id, updated);
+    return updated;
+  }
+
+  async deleteCompany(id: UUID) {
+    return this.companies.delete(id);
   }
 
   // -------------------- Jobs --------------------
@@ -88,6 +120,30 @@ export class MemoryDb implements Database {
 
   async deleteCandidate(id: UUID) {
     return this.candidates.delete(id);
+  }
+
+  // -------------------- Applications (RF-01/RF-04) --------------------
+  async listApplications(filter?: { jobId?: UUID; candidateId?: UUID }) {
+    let arr = Array.from(this.applications.values());
+    if (filter?.jobId) arr = arr.filter((a) => a.jobId === filter.jobId);
+    if (filter?.candidateId) arr = arr.filter((a) => a.candidateId === filter.candidateId);
+    return arr.sort((a, b) => b.matchPercent - a.matchPercent);
+  }
+
+  async getApplication(jobId: UUID, candidateId: UUID) {
+    for (const a of this.applications.values()) {
+      if (a.jobId === jobId && a.candidateId === candidateId) return a;
+    }
+    return null;
+  }
+
+  async createApplication(a: Application) {
+    this.applications.set(a.id, a);
+    return a;
+  }
+
+  async deleteApplication(id: UUID) {
+    return this.applications.delete(id);
   }
 
   // -------------------- Interviews --------------------
@@ -188,6 +244,22 @@ export class MemoryDb implements Database {
     }
     this.reports.set(r.id, r);
     return r;
+  }
+
+  // -------------------- CV Screenings --------------------
+  async listCvScreenings(jobId: UUID) {
+    return Array.from(this.cvScreenings.values())
+      .filter((s) => s.jobId === jobId)
+      .sort((a, b) => b.score - a.score || b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async createCvScreening(s: CvScreening) {
+    this.cvScreenings.set(s.id, s);
+    return s;
+  }
+
+  async deleteCvScreening(id: UUID) {
+    return this.cvScreenings.delete(id);
   }
 
   // -------------------- Audit --------------------

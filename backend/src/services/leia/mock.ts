@@ -7,6 +7,14 @@ import type {
   Report2Input,
   StructureJobInput,
   StructureJobOutput,
+  ScreenCvInput,
+  ScreenCvOutput,
+  RankCandidatesInput,
+  RankCandidatesOutput,
+  GenerateQuestionsInput,
+  GeneratedQuestion,
+  ParseCvInput,
+  ParseCvOutput,
 } from './index';
 import type { DimensionScores, Report1Payload, Report2Payload } from '../../types';
 import { computeQualityDistribution, computeSentimentFallback } from '../interview/analytics';
@@ -51,6 +59,125 @@ export class MockLeia implements LeiaService {
         'Colaboración con producto y diseño',
       ],
       niceToHave: [],
+    };
+  }
+
+  async screenCv(_input: ScreenCvInput): Promise<ScreenCvOutput> {
+    return {
+      score: 6.5,
+      recommendation: 'entrevistar',
+      summary: 'El candidato presenta experiencia relevante en varias áreas del puesto. Se recomienda una entrevista para profundizar en sus habilidades técnicas.',
+      strengths: ['Experiencia en el stack principal', 'Perfil alineado al seniority buscado'],
+      weaknesses: ['Algunos conocimientos específicos del puesto no están explícitos en el CV'],
+    };
+  }
+
+  async rankCandidates(input: RankCandidatesInput): Promise<RankCandidatesOutput> {
+    const results = await Promise.all(
+      input.candidates.map(async (c) => {
+        const s = await this.screenCv({ job: input.job, cvText: c.cvText, fileName: c.name });
+        return { candidateId: c.id, candidateName: c.name, ...s };
+      })
+    );
+    return results.sort((a, b) => b.score - a.score);
+  }
+
+  /**
+   * RF-02 (fallback determinista) — Arma el banco de preguntas desde el stack,
+   * las responsabilidades y los requisitos excluyentes del puesto. Siempre
+   * devuelve 5 o más, cubriendo los tres tipos exigidos.
+   */
+  async generateJobQuestions(input: GenerateQuestionsInput): Promise<GeneratedQuestion[]> {
+    const job = input.job;
+    const reqs = job.requirements;
+    const out: GeneratedQuestion[] = [];
+
+    // Técnicas: una por tecnología del stack (hasta 4).
+    for (const tech of reqs.stack.slice(0, 4)) {
+      out.push({
+        kind: 'tecnica',
+        text: `Contame cómo resolviste un problema concreto usando ${tech} y qué decisiones tomaste.`,
+      });
+    }
+    if (out.length === 0) {
+      out.push({
+        kind: 'tecnica',
+        text: `¿Qué herramientas usás habitualmente para las tareas de ${job.title} y por qué?`,
+      });
+    }
+
+    // Situacionales: derivadas de las responsabilidades (hasta 3).
+    for (const resp of reqs.responsibilities.slice(0, 3)) {
+      out.push({
+        kind: 'situacional',
+        text: `Contame de una vez que te tocó ${lowerFirst(resp)} y cómo lo manejaste.`,
+      });
+    }
+    if (reqs.responsibilities.length === 0) {
+      out.push({
+        kind: 'situacional',
+        text: 'Contame de un proyecto donde te tocó resolver algo bajo presión y cómo lo encaraste.',
+      });
+    }
+
+    // Descarte: requisitos excluyentes.
+    if (job.modality && job.modality !== 'remoto' && job.location) {
+      out.push({
+        kind: 'descarte',
+        text: `El puesto es ${job.modality} en ${job.location}. ¿Tenés disponibilidad para asistir presencialmente?`,
+      });
+    } else {
+      out.push({
+        kind: 'descarte',
+        text: '¿Tenés disponibilidad inmediata para incorporarte a esta búsqueda?',
+      });
+    }
+    out.push({ kind: 'descarte', text: '¿Cuál es tu pretensión salarial para este puesto?' });
+
+    if (reqs.yearsOfExperience > 0) {
+      out.push({
+        kind: 'descarte',
+        text: `El puesto pide ${reqs.yearsOfExperience} años de experiencia. ¿Cuántos acreditás en un rol similar?`,
+      });
+    }
+
+    return out.slice(0, 10);
+  }
+
+  /**
+   * RF-03 (fallback determinista) — Extrae del texto del CV lo que se puede
+   * inferir por reglas: email, teléfono, DNI, ubicación, herramientas y años.
+   */
+  async parseCv(input: ParseCvInput): Promise<ParseCvOutput> {
+    const text = input.cvText ?? '';
+    const herramientas = detectStack(text);
+    const anios = inferYears(text);
+    const nombreCompleto = inferName(text, input.fileName);
+
+    return {
+      personal: {
+        nombre: nombreCompleto.nombre,
+        apellido: nombreCompleto.apellido,
+        dni: reMatch(text, /\b(?:DNI|D\.N\.I\.?|Documento)\s*:?\s*([\d.]{7,12})\b/i, 1)?.replace(/\D/g, '') ?? null,
+        fechaNacimiento: null,
+        edad: null,
+        telefono: reMatch(text, /(?:\+?\d{1,3}[\s-]?)?(?:\(?\d{2,4}\)?[\s-]?)?\d{3}[\s-]?\d{4}/, 0),
+        email: reMatch(text, /[\w.+-]+@[\w-]+\.[\w.-]{2,}/, 0),
+        ubicacion: reMatch(text, /\b(?:Ciudad|Ubicaci[óo]n|Localidad|Residencia)\s*:?\s*([^\n]{3,60})/i, 1),
+      },
+      profile: {
+        tituloAcademico: reMatch(
+          text,
+          /\b(?:Lic\.?|Licenciad[oa]|Ingenier[oa]|Ing\.?|T[ée]cnic[oa]|Analista|Magister|Doctor[a]?)\s+[^\n,;]{3,60}/i,
+          0
+        ),
+        conocimientos: [],
+        herramientas,
+        idiomas: /ingl[ée]s/i.test(text) ? [{ idioma: 'Inglés', nivel: 'B1' as const }] : [],
+        timeline: [],
+        experienciaTotalAnios: anios,
+        experienciaRelevanteAnios: anios,
+      },
     };
   }
 
@@ -462,6 +589,38 @@ function extractKeyword(answer: string): string | null {
   if (words.length === 0) return null;
   // La palabra más larga suele ser la más informativa (nombre de tech, concepto).
   return words.sort((a, b) => b.length - a.length)[0];
+}
+
+function lowerFirst(s: string): string {
+  const t = (s ?? '').trim();
+  return t ? t[0].toLowerCase() + t.slice(1) : t;
+}
+
+function reMatch(text: string, re: RegExp, group: number): string | null {
+  const m = text.match(re);
+  if (!m) return null;
+  const v = (m[group] ?? '').trim();
+  return v.length > 0 ? v : null;
+}
+
+/** Años de experiencia declarados en el CV ("5 años de experiencia"). */
+function inferYears(text: string): number {
+  const m = text.match(/(\d{1,2})\s*\+?\s*a[ñn]os?\s+(?:de\s+)?experiencia/i);
+  if (m) return Math.min(40, parseInt(m[1], 10));
+  return 0;
+}
+
+/** Nombre/apellido: primera línea con 2+ palabras capitalizadas, o el filename. */
+function inferName(text: string, fileName: string): { nombre: string | null; apellido: string | null } {
+  const line = (text || '')
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => /^[A-ZÁÉÍÓÚÑ][\wÀ-ÿ]+(\s+[A-ZÁÉÍÓÚÑ][\wÀ-ÿ]+)+$/.test(l) && l.length < 60);
+  const source = line ?? fileName.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ');
+  const parts = source.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return { nombre: null, apellido: null };
+  if (parts.length === 1) return { nombre: parts[0], apellido: null };
+  return { nombre: parts[0], apellido: parts.slice(1).join(' ') };
 }
 
 function emptyDims(): DimensionScores {

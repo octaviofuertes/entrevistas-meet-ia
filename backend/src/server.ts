@@ -9,6 +9,7 @@ import { candidatesRoutes } from './routes/candidates';
 import { interviewsRoutes } from './routes/interviews';
 import { reportsRoutes } from './routes/reports';
 import { jobsRoutes } from './routes/jobs';
+import { companiesRoutes } from './routes/companies';
 import { leiaRoutes } from './routes/leia';
 import { interviewWsRoute } from './realtime/interview-ws';
 import { recallWebhookRoute } from './realtime/recall-webhook';
@@ -96,6 +97,7 @@ async function buildServer() {
   });
 
   await app.register(candidatesRoutes);
+  await app.register(companiesRoutes);
   await app.register(jobsRoutes);
   await app.register(interviewsRoutes);
   await app.register(leiaRoutes);

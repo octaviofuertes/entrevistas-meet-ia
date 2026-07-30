@@ -4,7 +4,10 @@ import * as path from 'path';
 import type { Database } from './index';
 import type {
   Job,
+  Company,
   Candidate,
+  Application,
+  CvScreening,
   Interview,
   InterviewTurn,
   TranscriptFragment,
@@ -30,6 +33,44 @@ export class PostgresDb implements Database {
     }
   }
 
+  // -------------------- Companies --------------------
+  async listCompanies() {
+    const { rows } = await this.pool.query(`SELECT * FROM companies ORDER BY name ASC`);
+    return rows.map(rowToCompany);
+  }
+
+  async getCompany(id: UUID) {
+    const { rows } = await this.pool.query(`SELECT * FROM companies WHERE id=$1`, [id]);
+    return rows[0] ? rowToCompany(rows[0]) : null;
+  }
+
+  async createCompany(c: Company) {
+    await this.pool.query(
+      `INSERT INTO companies (id, name, logo_url, country, cuit, mission, vision, type, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [c.id, c.name, c.logoUrl ?? null, c.country ?? null, c.cuit ?? null,
+       c.mission ?? null, c.vision ?? null, c.type ?? null, c.createdAt, c.updatedAt]
+    );
+    return c;
+  }
+
+  async updateCompany(id: UUID, patch: Partial<Company>) {
+    const existing = await this.getCompany(id);
+    if (!existing) return null;
+    const merged: Company = { ...existing, ...patch, updatedAt: new Date().toISOString() };
+    await this.pool.query(
+      `UPDATE companies SET name=$2, logo_url=$3, country=$4, cuit=$5, mission=$6, vision=$7, type=$8, updated_at=$9 WHERE id=$1`,
+      [merged.id, merged.name, merged.logoUrl ?? null, merged.country ?? null, merged.cuit ?? null,
+       merged.mission ?? null, merged.vision ?? null, merged.type ?? null, merged.updatedAt]
+    );
+    return merged;
+  }
+
+  async deleteCompany(id: UUID) {
+    const r = await this.pool.query(`DELETE FROM companies WHERE id=$1`, [id]);
+    return (r.rowCount ?? 0) > 0;
+  }
+
   // -------------------- Jobs --------------------
   async listJobs() {
     const { rows } = await this.pool.query(`SELECT * FROM jobs ORDER BY created_at DESC`);
@@ -43,16 +84,18 @@ export class PostgresDb implements Database {
 
   async createJob(j: Job) {
     await this.pool.query(
-      `INSERT INTO jobs (id, source_link, title, company, description, requirements, preferences, raw_text, published_at, location, salary, vacancies, modality, hiring_status, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+      `INSERT INTO jobs (id, source_link, title, company, company_id, description, requirements, preferences, questions, raw_text, published_at, location, salary, vacancies, modality, hiring_status, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
       [
         j.id,
         j.sourceLink,
         j.title,
         j.company,
+        j.companyId ?? null,
         j.description,
         JSON.stringify(j.requirements),
         JSON.stringify(j.preferences),
+        JSON.stringify(j.questions ?? []),
         j.rawText ?? null,
         j.publishedAt ?? null,
         j.location ?? null,
@@ -72,15 +115,17 @@ export class PostgresDb implements Database {
     if (!existing) return null;
     const merged: Job = { ...existing, ...patch, updatedAt: new Date().toISOString() };
     await this.pool.query(
-      `UPDATE jobs SET source_link=$2, title=$3, company=$4, description=$5, requirements=$6, preferences=$7, raw_text=$8, published_at=$9, location=$10, salary=$11, vacancies=$12, modality=$13, hiring_status=$14, updated_at=$15 WHERE id=$1`,
+      `UPDATE jobs SET source_link=$2, title=$3, company=$4, company_id=$5, description=$6, requirements=$7, preferences=$8, questions=$9, raw_text=$10, published_at=$11, location=$12, salary=$13, vacancies=$14, modality=$15, hiring_status=$16, updated_at=$17 WHERE id=$1`,
       [
         merged.id,
         merged.sourceLink,
         merged.title,
         merged.company,
+        merged.companyId ?? null,
         merged.description,
         JSON.stringify(merged.requirements),
         JSON.stringify(merged.preferences),
+        JSON.stringify(merged.questions ?? []),
         merged.rawText ?? null,
         merged.publishedAt ?? null,
         merged.location ?? null,
@@ -122,9 +167,13 @@ export class PostgresDb implements Database {
 
   async createCandidate(c: Candidate) {
     await this.pool.query(
-      `INSERT INTO candidates (id, email, name, phone, cv_url, notes, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [c.id, c.email, c.name, c.phone ?? null, c.cvUrl ?? null, c.notes ?? null, c.createdAt, c.updatedAt]
+      `INSERT INTO candidates (id, email, name, last_name, phone, dni, birth_date, age, location, cv_url, cv_text, profile, notes, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+      [
+        c.id, c.email, c.name, c.lastName ?? null, c.phone ?? null, c.dni ?? null,
+        c.birthDate ?? null, c.age ?? null, c.location ?? null, c.cvUrl ?? null, c.cvText ?? null,
+        c.profile ? JSON.stringify(c.profile) : null, c.notes ?? null, c.createdAt, c.updatedAt,
+      ]
     );
     return c;
   }
@@ -134,14 +183,67 @@ export class PostgresDb implements Database {
     if (!existing) return null;
     const merged: Candidate = { ...existing, ...patch, updatedAt: new Date().toISOString() };
     await this.pool.query(
-      `UPDATE candidates SET email=$2, name=$3, phone=$4, cv_url=$5, notes=$6, updated_at=$7 WHERE id=$1`,
-      [merged.id, merged.email, merged.name, merged.phone ?? null, merged.cvUrl ?? null, merged.notes ?? null, merged.updatedAt]
+      `UPDATE candidates SET email=$2, name=$3, last_name=$4, phone=$5, dni=$6, birth_date=$7, age=$8,
+         location=$9, cv_url=$10, cv_text=$11, profile=$12, notes=$13, updated_at=$14 WHERE id=$1`,
+      [
+        merged.id, merged.email, merged.name, merged.lastName ?? null, merged.phone ?? null,
+        merged.dni ?? null, merged.birthDate ?? null, merged.age ?? null, merged.location ?? null,
+        merged.cvUrl ?? null, merged.cvText ?? null,
+        merged.profile ? JSON.stringify(merged.profile) : null, merged.notes ?? null, merged.updatedAt,
+      ]
     );
     return merged;
   }
 
   async deleteCandidate(id: UUID) {
     const r = await this.pool.query(`DELETE FROM candidates WHERE id=$1`, [id]);
+    return (r.rowCount ?? 0) > 0;
+  }
+
+  // -------------------- Applications (RF-01/RF-04) --------------------
+  async listApplications(filter?: { jobId?: UUID; candidateId?: UUID }) {
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (filter?.jobId) {
+      params.push(filter.jobId);
+      where.push(`job_id = $${params.length}`);
+    }
+    if (filter?.candidateId) {
+      params.push(filter.candidateId);
+      where.push(`candidate_id = $${params.length}`);
+    }
+    const sql = `SELECT * FROM applications ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY match_percent DESC`;
+    const { rows } = await this.pool.query(sql, params);
+    return rows.map(rowToApplication);
+  }
+
+  async getApplication(jobId: UUID, candidateId: UUID) {
+    const { rows } = await this.pool.query(
+      `SELECT * FROM applications WHERE job_id=$1 AND candidate_id=$2`,
+      [jobId, candidateId]
+    );
+    return rows[0] ? rowToApplication(rows[0]) : null;
+  }
+
+  async createApplication(a: Application) {
+    await this.pool.query(
+      `INSERT INTO applications (id, job_id, candidate_id, match_percent, breakdown, patterns, resumen_ejecutivo, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT (job_id, candidate_id) DO UPDATE SET
+         match_percent = EXCLUDED.match_percent,
+         breakdown = EXCLUDED.breakdown,
+         patterns = EXCLUDED.patterns,
+         resumen_ejecutivo = EXCLUDED.resumen_ejecutivo`,
+      [
+        a.id, a.jobId, a.candidateId, a.matchPercent,
+        JSON.stringify(a.breakdown), JSON.stringify(a.patterns), a.resumenEjecutivo, a.createdAt,
+      ]
+    );
+    return a;
+  }
+
+  async deleteApplication(id: UUID) {
+    const r = await this.pool.query(`DELETE FROM applications WHERE id=$1`, [id]);
     return (r.rowCount ?? 0) > 0;
   }
 
@@ -357,6 +459,30 @@ export class PostgresDb implements Database {
     return r;
   }
 
+  // -------------------- CV Screenings --------------------
+  async listCvScreenings(jobId: UUID) {
+    const { rows } = await this.pool.query(
+      `SELECT * FROM cv_screenings WHERE job_id=$1 ORDER BY score DESC, created_at DESC`,
+      [jobId]
+    );
+    return rows.map(rowToCvScreening);
+  }
+
+  async createCvScreening(s: CvScreening) {
+    await this.pool.query(
+      `INSERT INTO cv_screenings (id, job_id, file_name, score, recommendation, summary, strengths, weaknesses, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [s.id, s.jobId, s.fileName, s.score, s.recommendation, s.summary,
+       JSON.stringify(s.strengths), JSON.stringify(s.weaknesses), s.createdAt]
+    );
+    return s;
+  }
+
+  async deleteCvScreening(id: UUID) {
+    const r = await this.pool.query(`DELETE FROM cv_screenings WHERE id=$1`, [id]);
+    return (r.rowCount ?? 0) > 0;
+  }
+
   // -------------------- Audit --------------------
   async log(entry: AuditLog) {
     await this.pool.query(
@@ -368,15 +494,32 @@ export class PostgresDb implements Database {
 }
 
 // -------------------- Mappers --------------------
+function rowToCompany(r: any): Company {
+  return {
+    id: r.id,
+    name: r.name,
+    logoUrl: r.logo_url ?? null,
+    country: r.country ?? null,
+    cuit: r.cuit ?? null,
+    mission: r.mission ?? null,
+    vision: r.vision ?? null,
+    type: r.type ?? null,
+    createdAt: r.created_at.toISOString(),
+    updatedAt: r.updated_at.toISOString(),
+  };
+}
+
 function rowToJob(r: any): Job {
   return {
     id: r.id,
     sourceLink: r.source_link,
     title: r.title,
     company: r.company,
+    companyId: r.company_id ?? null,
     description: r.description,
     requirements: r.requirements,
     preferences: r.preferences,
+    questions: Array.isArray(r.questions) ? r.questions : [],
     rawText: r.raw_text,
     publishedAt: r.published_at?.toISOString() ?? null,
     location: r.location,
@@ -394,11 +537,31 @@ function rowToCandidate(r: any): Candidate {
     id: r.id,
     email: r.email,
     name: r.name,
+    lastName: r.last_name ?? null,
     phone: r.phone,
+    dni: r.dni ?? null,
+    birthDate: r.birth_date ? new Date(r.birth_date).toISOString().slice(0, 10) : null,
+    age: r.age ?? null,
+    location: r.location ?? null,
     cvUrl: r.cv_url,
+    cvText: r.cv_text ?? null,
+    profile: r.profile ?? null,
     notes: r.notes,
     createdAt: r.created_at.toISOString(),
     updatedAt: r.updated_at.toISOString(),
+  };
+}
+
+function rowToApplication(r: any): Application {
+  return {
+    id: r.id,
+    jobId: r.job_id,
+    candidateId: r.candidate_id,
+    matchPercent: Number(r.match_percent),
+    breakdown: r.breakdown,
+    patterns: r.patterns,
+    resumenEjecutivo: r.resumen_ejecutivo ?? '',
+    createdAt: r.created_at.toISOString(),
   };
 }
 
@@ -480,6 +643,20 @@ function rowToReport(r: any): Report {
     jobId: r.job_id,
     kind: r.kind,
     payload: r.payload,
+    createdAt: r.created_at.toISOString(),
+  };
+}
+
+function rowToCvScreening(r: any): CvScreening {
+  return {
+    id: r.id,
+    jobId: r.job_id,
+    fileName: r.file_name,
+    score: parseFloat(r.score),
+    recommendation: r.recommendation,
+    summary: r.summary,
+    strengths: r.strengths ?? [],
+    weaknesses: r.weaknesses ?? [],
     createdAt: r.created_at.toISOString(),
   };
 }

@@ -23,7 +23,7 @@ async function main() {
   console.log('└──────────────────────────────────────────────────────┘');
   console.log('\n📋 Copiá esta línea en tu .env y reiniciá el backend:\n');
   console.log(`   PUBLIC_BASE_URL=${url}`);
-  console.log(`   CORS_ORIGIN=http://localhost:3000,${url}`);
+  console.log(`   CORS_ORIGIN=http://localhost:4200,${url}`);
   console.log('\n⏳ ngrok queda corriendo. Ctrl+C para cerrar.\n');
 
   // Mantener el proceso vivo

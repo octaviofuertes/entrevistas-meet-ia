@@ -43,10 +43,13 @@ function buildJob(overrides?: Partial<Job>): Job {
       generateReport1: false,
       generateReport2: false,
     },
+    questions: [],
     rawText: null,
     createdAt: now,
     updatedAt: now,
     ...overrides,
+    // `overrides` es Partial<Job>: si no trae questions, mantenemos el default.
+    ...(overrides?.questions ? { questions: overrides.questions } : {}),
   };
 }
 

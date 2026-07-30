@@ -62,7 +62,7 @@ export async function buildJobFromLink(link: string, overrides?: {
   };
 
   const now = new Date().toISOString();
-  return {
+  const job: Job = {
     id: uuid(),
     sourceLink: link,
     title,
@@ -70,6 +70,7 @@ export async function buildJobFromLink(link: string, overrides?: {
     description,
     requirements,
     preferences,
+    questions: [],
     rawText: html ? html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 4000) : null,
     publishedAt: now,
     location: null,
@@ -80,6 +81,10 @@ export async function buildJobFromLink(link: string, overrides?: {
     createdAt: now,
     updatedAt: now,
   };
+
+  // RF-02: el banco de preguntas lo genera la capa de rutas (generateQuestionsFor)
+  // apenas se guarda el puesto, para no acoplar este builder al servicio de IA.
+  return job;
 }
 
 function parseQueryHints(url: URL) {

@@ -79,6 +79,7 @@ export async function leiaRoutes(app: FastifyInstance) {
           generateReport1: false,
           generateReport2: false,
         },
+        questions: [],
         rawText: null,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),

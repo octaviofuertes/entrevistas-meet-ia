@@ -2,19 +2,21 @@ import { v4 as uuid } from 'uuid';
 import { config } from '../../config';
 import { getLeia } from '../leia';
 import { ALL_DIMENSIONS } from '../../types';
-import type { Job, JobPreferences, JobModality, JobHiringStatus } from '../../types';
+import type { Job, Company, JobPreferences, JobModality, JobHiringStatus } from '../../types';
 
 export interface JobFormInput {
   title: string;
   company?: string;
+  companyId?: string | null;
+  companyData?: Company | null;
   description: string;
-  knowledge: string; // conocimientos que debe tener la persona
+  knowledge: string;
   location?: string;
   salary?: string;
   modality?: JobModality;
   vacancies?: number;
   hiringStatus?: JobHiringStatus;
-  publishedAt?: string; // ISO date (fecha de publicación)
+  publishedAt?: string;
   language?: string;
   preferences?: Partial<JobPreferences>;
 }
@@ -33,6 +35,7 @@ export async function buildJobFromForm(input: JobFormInput): Promise<Job> {
     description: input.description,
     knowledge: input.knowledge,
     language,
+    company: input.companyData ?? null,
   });
 
   const preferences: JobPreferences = {
@@ -44,12 +47,15 @@ export async function buildJobFromForm(input: JobFormInput): Promise<Job> {
     behavioralAnalysisEnabled: true,
   };
 
+  const companyName = input.companyData?.name ?? input.company ?? '';
+
   const now = new Date().toISOString();
-  return {
+  const job: Job = {
     id: uuid(),
     sourceLink: 'form',
     title: input.title.trim(),
-    company: (input.company ?? '').trim(),
+    company: companyName.trim(),
+    companyId: input.companyId ?? null,
     description: input.description.trim(),
     requirements: {
       stack: structure.stack,
@@ -60,6 +66,7 @@ export async function buildJobFromForm(input: JobFormInput): Promise<Job> {
       language,
     },
     preferences,
+    questions: [],
     rawText: input.knowledge?.trim() || null,
     publishedAt: input.publishedAt ?? now,
     location: input.location?.trim() || null,
@@ -70,4 +77,8 @@ export async function buildJobFromForm(input: JobFormInput): Promise<Job> {
     createdAt: now,
     updatedAt: now,
   };
+
+  // RF-02: el banco de preguntas lo genera la capa de rutas (generateQuestionsFor)
+  // apenas se guarda el puesto.
+  return job;
 }

@@ -42,6 +42,7 @@ export async function seedDb(db: Database) {
       generateReport2: true,
       behavioralAnalysisEnabled: true,
     },
+    questions: [],
     rawText: 'Frontend React Senior – Buscamos perfil senior con foco en React/TS.',
     publishedAt: now,
     location: 'Buenos Aires (remoto)',

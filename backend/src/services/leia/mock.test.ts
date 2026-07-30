@@ -23,6 +23,7 @@ const job: Job = {
     generateReport1: true,
     generateReport2: true,
   },
+  questions: [],
   createdAt: '2026-07-07T00:00:00.000Z',
   updatedAt: '2026-07-07T00:00:00.000Z',
 };

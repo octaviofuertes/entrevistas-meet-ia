@@ -1,6 +1,25 @@
 export type UUID = string;
 export type ISODate = string;
 export type TTSDriver = 'mock' | 'elevenlabs' | 'gemini' | 'edge';
+export type CvRecommendation = 'contratar' | 'entrevistar' | 'descartar';
+
+// ============================================================
+// COMPANIES — perfil de empresa para los puestos
+// ============================================================
+export type CompanyType = 'privada' | 'publica' | 'mixta';
+
+export interface Company {
+  id: UUID;
+  name: string;
+  logoUrl?: string | null;
+  country?: string | null;
+  cuit?: string | null;
+  mission?: string | null;
+  vision?: string | null;
+  type?: CompanyType | null;
+  createdAt: ISODate;
+  updatedAt: ISODate;
+}
 
 // ============================================================
 // JOBS - puestos generados a partir de un link
@@ -24,6 +43,25 @@ export interface JobPreferences {
   behavioralAnalysisEnabled?: boolean;
 }
 
+// ============================================================
+// RF-02 — Banco de preguntas generado automáticamente por IA
+// ============================================================
+/**
+ * Tipos de pregunta que la IA debe generar al guardar el puesto:
+ *  - tecnica:     valida el stack solicitado (React, TypeScript, …)
+ *  - situacional: comportamental, basada en las responsabilidades del puesto
+ *  - descarte:    verifica requisitos excluyentes (radicación, pretensión salarial)
+ */
+export type JobQuestionKind = 'tecnica' | 'situacional' | 'descarte';
+
+export interface JobQuestion {
+  id: UUID;
+  text: string;
+  kind: JobQuestionKind;
+  /** 'ia' = generada automáticamente; 'manual' = editada/agregada por el reclutador. */
+  source: 'ia' | 'manual';
+}
+
 export type JobModality = 'presencial' | 'hibrido' | 'remoto';
 export type JobHiringStatus = 'abierto' | 'pausado' | 'cerrado';
 
@@ -32,9 +70,12 @@ export interface Job {
   sourceLink: string;
   title: string;
   company: string;
+  companyId?: UUID | null;
   description: string;
   requirements: JobRequirements;
   preferences: JobPreferences;
+  /** RF-02: banco de 5-10 preguntas generado por IA al guardar el puesto. */
+  questions: JobQuestion[];
   rawText?: string | null;
   /** Fecha de publicación de la búsqueda. */
   publishedAt?: ISODate | null;
@@ -48,17 +89,129 @@ export interface Job {
 }
 
 // ============================================================
+// CV SCREENINGS — evaluación de CVs contra un puesto
+// ============================================================
+export interface CvScreening {
+  id: UUID;
+  jobId: UUID;
+  fileName: string;
+  score: number;
+  recommendation: CvRecommendation;
+  summary: string;
+  strengths: string[];
+  weaknesses: string[];
+  createdAt: ISODate;
+}
+
+// ============================================================
 // CANDIDATES
 // ============================================================
+/** RF-03 — Nivel de idioma según marco común europeo (o nativo). */
+export type LanguageLevel = 'A1' | 'A2' | 'B1' | 'B2' | 'C1' | 'C2' | 'Nativo';
+
+export interface CandidateLanguage {
+  idioma: string;
+  nivel: LanguageLevel;
+}
+
+/** RF-03 — Un puesto dentro de la línea de tiempo laboral del candidato. */
+export interface CandidateTimelineEntry {
+  empresa: string;
+  rol: string;
+  /** Formato libre extraído del CV (ej. "03/2021"). */
+  desde: string;
+  hasta: string;
+  /** Duración calculada/inferida en meses (para detectar rotación). */
+  meses: number;
+  /** ¿Tuvo gente a cargo / lideró en este puesto? */
+  liderazgo?: boolean;
+}
+
+/**
+ * RF-03 — "Ficha Resumen" del candidato extraída del CV por el pipeline
+ * de parsing (OCR + LLM), sin tipeo manual.
+ */
+export interface CandidateProfile {
+  tituloAcademico: string | null;
+  /** Mapeo de conocimientos técnicos. */
+  conocimientos: string[];
+  /** Mapeo de herramientas. */
+  herramientas: string[];
+  idiomas: CandidateLanguage[];
+  /** Línea de tiempo laboral. */
+  timeline: CandidateTimelineEntry[];
+  experienciaTotalAnios: number;
+  experienciaRelevanteAnios: number;
+}
+
 export interface Candidate {
   id: UUID;
   email: string;
   name: string;
+  /** RF-03 — Apellido, extraído del CV. */
+  lastName?: string | null;
   phone?: string | null;
+  /** RF-03 — Datos personales extraídos del CV. */
+  dni?: string | null;
+  birthDate?: string | null;
+  age?: number | null;
+  location?: string | null;
   cvUrl?: string | null;
+  cvText?: string | null;
+  /** RF-03 — Ficha resumen parseada del CV. */
+  profile?: CandidateProfile | null;
   notes?: string | null;
   createdAt: ISODate;
   updatedAt: ISODate;
+}
+
+// ============================================================
+// RF-04 — Motor de matching y detección de patrones
+// ============================================================
+/**
+ * Ponderación fija exigida por RF-04:
+ *   Hard Skills 40% · Años de Experiencia 30% · Ubicación/Modalidad 15% · Educación 15%
+ */
+export interface MatchBreakdown {
+  hardSkills: number;
+  experiencia: number;
+  ubicacionModalidad: number;
+  educacion: number;
+}
+
+/** Puntos porcentuales por componente (suman 100). Enteros: evita drift de coma flotante. */
+export const MATCH_WEIGHTS = {
+  hardSkills: 40,
+  experiencia: 30,
+  ubicacionModalidad: 15,
+  educacion: 15,
+} as const;
+
+/** RF-04 — Profiling de RRHH: patrones y riesgos detectados en la trayectoria. */
+export interface RiskPatterns {
+  /** Rotación: cambios de empleo en períodos < 1 año dentro de los últimos 4 años. */
+  rotacionAlta: boolean;
+  rotacionDetalle: string;
+  /** Nivel de responsabilidad: gente a cargo, liderazgo de proyectos, presupuestos. */
+  nivelResponsabilidad: 'sin_datos' | 'individual' | 'lider_proyecto' | 'gente_a_cargo';
+  responsabilidadDetalle: string;
+  /** Tecnologías exigidas por el puesto que NO están en el CV. */
+  gaps: string[];
+}
+
+/**
+ * RF-01/RF-04 — Postulación: vincula un candidato a un puesto (el CV se asocia
+ * siempre a una vacante) y guarda el resultado del motor de matching.
+ */
+export interface Application {
+  id: UUID;
+  jobId: UUID;
+  candidateId: UUID;
+  matchPercent: number;
+  breakdown: MatchBreakdown;
+  patterns: RiskPatterns;
+  resumenEjecutivo: string;
+  createdAt: ISODate;
 }
 
 // ============================================================

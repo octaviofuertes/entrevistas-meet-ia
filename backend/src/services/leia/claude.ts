@@ -9,16 +9,29 @@ import type {
   Report2Input,
   StructureJobInput,
   StructureJobOutput,
+  ScreenCvInput,
+  ScreenCvOutput,
+  RankCandidatesInput,
+  RankCandidatesOutput,
+  GenerateQuestionsInput,
+  GeneratedQuestion,
+  ParseCvInput,
+  ParseCvOutput,
 } from './index';
 import type { DimensionScores, Report1Payload, Report2Payload } from '../../types';
 import {
   LEIA_SYSTEM_PROMPT,
   LEIA_REPORT1_SYSTEM_PROMPT,
   LEIA_REPORT2_SYSTEM_PROMPT,
+  LEIA_QUESTIONS_SYSTEM_PROMPT,
+  LEIA_PARSE_CV_SYSTEM_PROMPT,
   buildEvaluatePrompt,
   buildReport1Prompt,
   buildReport2Prompt,
+  buildQuestionsPrompt,
+  buildParseCvPrompt,
 } from './prompts';
+import { normalizeGeneratedQuestions, normalizeParsedCv } from './parsing';
 import { MockLeia } from './mock';
 
 /**
@@ -82,18 +95,37 @@ Devolvé SOLO el texto.`;
   }
 
   async structureJob(input: StructureJobInput): Promise<StructureJobOutput> {
-    const sys = `Sos leIA. Estructurá este puesto a partir del texto libre que cargó un reclutador.
+    const sys = `Sos leIA. Estructurá este puesto a partir del texto que cargó un reclutador.
 Devolvé JSON ESTRICTO con esta forma exacta:
 {"stack":["..."],"seniority":"junior|semi|senior|lead","yearsOfExperience":<entero>,"responsibilities":["..."],"niceToHave":["..."]}
-- "stack": tecnologías concretas mencionadas o claramente implícitas (máx 8).
-- "seniority": una de junior/semi/senior/lead según el texto.
-- "responsibilities": 3 a 5 responsabilidades concretas.
-- "niceToHave": 0 a 5 items, puede ser vacío.
+- "stack": herramientas, tecnologías o conocimientos específicos MENCIONADOS EXPLÍCITAMENTE en el título, descripción o conocimientos del puesto. NO inferir del rubro de la empresa. Para roles no técnicos (contadores, administrativos, RRHH, etc.) podés incluir herramientas propias del oficio (Excel, SAP, sistemas contables). Si no se menciona nada concreto, devolvé array vacío [].
+- "seniority": una de junior/semi/senior/lead según el texto; si no queda claro, usá "semi".
+- "responsibilities": 3 a 5 responsabilidades concretas del ROL (no de la empresa).
+- "niceToHave": 0 a 5 items, puede ser [].
 No agregues texto fuera del JSON.`;
+    const co = input.company;
+    const companyLines = co
+      ? [
+          co.name ? `Empresa contratante: ${co.name}` : '',
+          co.country ? `País: ${co.country}` : '',
+          co.type ? `Tipo de empresa: ${co.type}` : '',
+          co.mission ? `Misión de la empresa (contexto, NO requisitos del candidato): ${co.mission}` : '',
+          co.vision ? `Visión de la empresa (contexto): ${co.vision}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n')
+      : '';
     try {
       const text = await this.callClaude({
         system: sys,
-        user: `Título: ${input.title}\nDescripción: ${input.description}\nConocimientos requeridos: ${input.knowledge}`,
+        user: [
+          `Título del puesto: ${input.title}`,
+          `Descripción: ${input.description}`,
+          `Conocimientos requeridos: ${input.knowledge}`,
+          companyLines ? `\n--- Contexto de la empresa (solo para enriquecer) ---\n${companyLines}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n'),
         maxTokens: 500,
         temperature: 0.4,
       });
@@ -102,7 +134,6 @@ No agregues texto fuera del JSON.`;
         ? parsed.seniority
         : 'semi';
       const stack = Array.isArray(parsed.stack) ? parsed.stack.map(String).slice(0, 8) : [];
-      if (stack.length === 0) throw new Error('sin stack detectado');
       return {
         stack,
         seniority,
@@ -116,6 +147,69 @@ No agregues texto fuera del JSON.`;
       logger.warn({ err }, 'claude.structureJob: fallback a mock');
       return this.fallback.structureJob(input);
     }
+  }
+
+  async screenCv(input: ScreenCvInput): Promise<ScreenCvOutput> {
+    const reqStack = input.job.requirements.stack.join(', ') || '(no especificado)';
+    const sys = `Sos leIA, especialista en selección de talento. Evaluás CVs contra los requisitos de un puesto y devolvés un análisis objetivo.
+
+Puesto: ${input.job.title} en ${input.job.company || '(empresa no especificada)'}.
+Stack requerido: ${reqStack}.
+Seniority buscado: ${input.job.requirements.seniority}.
+Experiencia mínima: ${input.job.requirements.yearsOfExperience} años.
+Responsabilidades: ${input.job.requirements.responsibilities.slice(0, 4).join('; ') || '(no especificadas)'}.
+${input.job.description ? `Descripción adicional: ${input.job.description.slice(0, 500)}` : ''}
+
+Devolvé JSON ESTRICTO:
+{"score":<0.0-10.0>,"recommendation":"contratar|entrevistar|descartar","summary":"<2-3 oraciones>","strengths":["..."],"weaknesses":["..."]}
+
+Criterios: "contratar" ≥7.5, "entrevistar" 5-7.4, "descartar" <5.
+No agregues texto fuera del JSON.`;
+    try {
+      const text = await this.callClaude({
+        system: sys,
+        user: `CV (archivo: ${input.fileName}):\n${input.cvText.slice(0, 4000)}`,
+        maxTokens: 600,
+        temperature: 0.3,
+      });
+      const parsed = JSON.parse(extractJSON(text));
+      const score = Math.max(0, Math.min(10, parseFloat(parsed.score) || 0));
+      const rec = ['contratar', 'entrevistar', 'descartar'].includes(parsed.recommendation)
+        ? (parsed.recommendation as ScreenCvOutput['recommendation'])
+        : score >= 7.5 ? 'contratar' : score >= 5 ? 'entrevistar' : 'descartar';
+      return {
+        score,
+        recommendation: rec,
+        summary: String(parsed.summary || ''),
+        strengths: Array.isArray(parsed.strengths) ? parsed.strengths.map(String).slice(0, 6) : [],
+        weaknesses: Array.isArray(parsed.weaknesses) ? parsed.weaknesses.map(String).slice(0, 6) : [],
+      };
+    } catch (err) {
+      logger.warn({ err }, 'claude.screenCv: fallback a mock');
+      return this.fallback.screenCv(input);
+    }
+  }
+
+  async rankCandidates(input: RankCandidatesInput): Promise<RankCandidatesOutput> {
+    const results = await Promise.all(
+      input.candidates.map(async (c) => {
+        try {
+          const s = await this.screenCv({ job: input.job, cvText: c.cvText, fileName: c.name });
+          return { candidateId: c.id, candidateName: c.name, ...s };
+        } catch {
+          return {
+            candidateId: c.id,
+            candidateName: c.name,
+            score: 0,
+            recommendation: 'descartar' as const,
+            summary: 'No se pudo analizar el CV.',
+            strengths: [],
+            weaknesses: [],
+          };
+        }
+      })
+    );
+    return results.sort((a, b) => b.score - a.score);
   }
 
   async firstQuestion(input: FirstQuestionInput): Promise<string> {
@@ -159,6 +253,7 @@ Devolvé SOLO el texto a decir.`;
           lastAnswer: input.lastAnswer,
           turnIndex: input.turnIndex,
           cvText: input.cvText,
+          gaps: input.gaps,
         }),
         maxTokens: 450,
         temperature: 0.6,
@@ -242,6 +337,41 @@ Devolvé SOLO el texto a decir.`;
     }
   }
 
+  /** RF-02 — Banco de 5 a 10 preguntas generado automáticamente al guardar el puesto. */
+  async generateJobQuestions(input: GenerateQuestionsInput): Promise<GeneratedQuestion[]> {
+    try {
+      const text = await this.callClaude({
+        system: LEIA_QUESTIONS_SYSTEM_PROMPT,
+        user: buildQuestionsPrompt(input.job),
+        maxTokens: 900,
+        temperature: 0.6,
+      });
+      const parsed = JSON.parse(extractJSON(text));
+      const out = normalizeGeneratedQuestions(parsed?.questions);
+      if (out.length < 5) throw new Error('menos de 5 preguntas');
+      return out;
+    } catch (err) {
+      logger.warn({ err }, 'claude.generateJobQuestions: fallback a mock');
+      return this.fallback.generateJobQuestions(input);
+    }
+  }
+
+  /** RF-03 — Extracción e inferencia de datos del CV (datos personales + ficha resumen). */
+  async parseCv(input: ParseCvInput): Promise<ParseCvOutput> {
+    try {
+      const text = await this.callClaude({
+        system: LEIA_PARSE_CV_SYSTEM_PROMPT,
+        user: buildParseCvPrompt(input.cvText, input.fileName),
+        maxTokens: 2000,
+        temperature: 0.1,
+      });
+      return normalizeParsedCv(JSON.parse(extractJSON(text)), input.cvText);
+    } catch (err) {
+      logger.warn({ err }, 'claude.parseCv: fallback a mock');
+      return this.fallback.parseCv(input);
+    }
+  }
+
   private async callClaude(opts: {
     system: string;
     user: string;
@@ -292,7 +422,9 @@ function extractJSON(text: string): string {
 
 function clamp10(n: unknown): number {
   const x = typeof n === 'number' ? n : parseFloat(String(n));
-  if (isNaN(x)) return 5;
+  // Un valor ausente/ inválido NO es "promedio": vale 0. Antes devolvía 5, lo
+  // que inflaba el informe cuando el candidato no daba material para puntuar.
+  if (isNaN(x)) return 0;
   return Math.max(0, Math.min(10, Math.round(x * 10) / 10));
 }
 
@@ -357,14 +489,10 @@ function parseReport2(text: string, stack: string[]): Report2Payload {
     scoreTotal: clamp10(parsed.scoreTotal ?? avg(dimensions)),
     dimensions,
     stackScores,
-    softskills: clamp10(parsed.softskills ?? avg({
-      comunicacion: dimensions.comunicacion,
-      tecnicos: dimensions.actitud,
-      experiencia: dimensions.trabajoEquipo,
-      resolucion: dimensions.actitud,
-      actitud: dimensions.actitud,
-      trabajoEquipo: dimensions.trabajoEquipo,
-    })),
+    softskills: clamp10(
+      parsed.softskills ??
+        (dimensions.comunicacion + dimensions.actitud + dimensions.trabajoEquipo) / 3
+    ),
     strengths: Array.isArray(parsed.strengths) ? parsed.strengths.slice(0, 8).map(String) : [],
     weaknesses: Array.isArray(parsed.weaknesses) ? parsed.weaknesses.slice(0, 8).map(String) : [],
     flags: Array.isArray(parsed.flags) ? parsed.flags.slice(0, 12).map(String) : [],

@@ -7,6 +7,7 @@ import type {
   InterviewTurn,
   Evaluation,
   Report,
+  Report2Payload,
   Job,
   Candidate,
   TranscriptFragment,
@@ -17,7 +18,12 @@ import { getRecall, getBrowserRecall } from '../recall';
 import type { RecallService } from '../recall';
 import { browserSalaBus } from '../recall/browser';
 import { VoiceSession, registerVoiceSession, disposeVoiceSession } from '../voice/live-session';
-import { computeQualityDistribution, computeSentimentFallback, isEmptySentiment } from './analytics';
+import {
+  hasEvaluableAnswers,
+  reconcileReport2,
+  buildInsufficientReport1,
+  buildInsufficientReport2,
+} from './report-aggregate';
 import type { EvaluateOutput } from '../leia';
 
 /**
@@ -47,6 +53,16 @@ export class InterviewEngine {
   private turnIndex = 0;
   private currentQuestion = '';
   private currentTurn: InterviewTurn | null = null;
+  /**
+   * CV efectivo del candidato: el subido en la sala (interview.cvText) o, si no
+   * hay, el que ya tenía cargado en su perfil (candidate.cvText). Resuelto una
+   * vez en start() y usado en preguntas, evaluación e informes.
+   */
+  private cvText: string | null = null;
+  /** Cola de preguntas obligatorias del puesto pendientes de hacer. */
+  private mustAsk: string[] = [];
+  /** RF-05: brechas de habilidades (puesto vs CV) detectadas por el matching. */
+  private gaps: string[] = [];
   private answerBuffer: string[] = [];
   private answerStartedAtMs = 0;
   private finished = false;
@@ -95,6 +111,23 @@ export class InterviewEngine {
     if (!cand) throw new Error('Candidato no encontrado');
     this.candidate = cand;
 
+    // CV efectivo: el subido en la sala tiene prioridad; si no hay, caemos al
+    // que el candidato ya tenía cargado en su perfil. Así leIA SIEMPRE tiene
+    // contexto del CV cuando existe uno, sin depender de que lo re-suban.
+    this.cvText = iv.cvText ?? cand.cvText ?? null;
+
+    // RF-05: brechas detectadas por el motor de matching (puesto vs CV) para
+    // que leIA las sondee durante la entrevista.
+    const application = await this.db.getApplication(job.id, cand.id);
+    this.gaps = application?.patterns?.gaps ?? [];
+
+    // RF-02/RF-05: el banco de preguntas generado por IA para este puesto.
+    // leIA saluda y a continuación las hace todas, en orden, antes de seguir
+    // con sus preguntas adaptativas (y no puede cerrar hasta agotarlas).
+    this.mustAsk = (this.job.questions ?? [])
+      .map((q) => (q?.text ?? '').trim())
+      .filter((q) => q.length > 0);
+
     this.startedAtMs = Date.now();
     await this.db.updateInterview(iv.id, {
       status: 'en_curso',
@@ -110,7 +143,7 @@ export class InterviewEngine {
     const introPromise = this.leia.firstQuestion({
       job: this.job,
       candidateName: this.candidate.name,
-      cvText: iv.cvText,
+      cvText: this.cvText,
     });
     this.leia
       .generateFillers({ job: this.job, candidateName: this.candidate.name })
@@ -196,7 +229,7 @@ export class InterviewEngine {
         registerVoiceSession(this.interviewId, voiceSession);
         introPromise.catch(() => {}); // no se consume en modo live, evita unhandled rejection
         try {
-          await voiceSession.connectAndGreet(this.job, this.candidate, iv.cvText);
+          await voiceSession.connectAndGreet(this.job, this.candidate, this.cvText);
         } catch (err) {
           logger.warn({ err, interviewId: this.interviewId }, 'voice-session: no se pudo conectar a Gemini Live');
           await this.fallbackFromLive();
@@ -340,6 +373,18 @@ export class InterviewEngine {
     // Ahora: frase 1 y 2 sintetizan en paralelo (~1s), llegan al frontend casi juntas,
     // y se reproducen de corrido sin hueco.
     const sentences = splitSentences(text);
+
+    // Bloquear transcripts prematuros durante toda la síntesis+reproducción.
+    // markBotSpeaking se actualiza con la duración real al terminar el loop,
+    // pero si no lo llamamos ANTES, un transcript que llega entre chunks puede
+    // pasar el check isBotSpeaking() y disparar commitAnswer demasiado pronto.
+    this.markBotSpeaking(Math.max(30_000, sentences.length * 15_000));
+
+    const isBrowser = this.interview?.mode === 'browser';
+    if (isBrowser) {
+      getBrowserRecall(this.interviewId).forwardSpeakingStart();
+    }
+
     // Arrancar todas las síntesis al mismo tiempo
     const audioPromises = sentences.map((s) =>
       this.tts
@@ -369,6 +414,9 @@ export class InterviewEngine {
     if (totalDuration > 0) {
       this.markBotSpeaking(totalDuration, firstSentAt || undefined);
       this.emit('audio_generated', { text, mimeType: 'audio/mpeg', durationMs: totalDuration, bytes: 0 });
+    }
+    if (isBrowser) {
+      getBrowserRecall(this.interviewId).forwardSpeakingDone();
     }
   }
 
@@ -543,7 +591,8 @@ export class InterviewEngine {
       lastAnswer: text,
       turnIndex: this.turnIndex,
       elapsedSec,
-      cvText: this.interview.cvText,
+      cvText: this.cvText,
+      gaps: this.gaps,
     });
 
     // Cinturón de seguridad: si la próxima pregunta es muy parecida a alguna ya
@@ -562,7 +611,7 @@ export class InterviewEngine {
             ` [Nota interna: la pregunta "${truncate(result.nextQuestion, 120)}" es muy parecida a "${truncate(repeat, 120)}" — generá una distinta, sobre otro ángulo del puesto.]`,
           turnIndex: this.turnIndex,
           elapsedSec,
-          cvText: this.interview.cvText,
+          cvText: this.cvText,
         });
         // Si la segunda también es similar, dejamos pasar para no entrar en loop.
         result = retried;
@@ -583,7 +632,11 @@ export class InterviewEngine {
     await this.db.updateTurn(updatedTurn.id, { evaluationId: evaluation.id });
     this.emit('leia_evaluation_ready', { evaluation, turnId: updatedTurn.id });
 
-    if (result.shouldFinish) {
+    // Solo se puede cerrar cuando NO quedan preguntas obligatorias pendientes.
+    // El hard-stop es una red de seguridad contra entrevistas infinitas si el
+    // driver nunca marca shouldFinish.
+    const hardStop = this.turnIndex >= HARD_MAX_TURNS;
+    if ((result.shouldFinish && this.mustAsk.length === 0) || hardStop) {
       const closing = await this.leia.generateClosing({
         job: this.job,
         candidateName: this.candidate.name,
@@ -609,10 +662,32 @@ export class InterviewEngine {
       return;
     }
 
-    // Si leIA pide aclaración no avanzamos el índice de turno temático:
-    // sigue siendo la misma "pregunta" original, solo que reformulada.
-    if (!result.isClarification) this.turnIndex++;
-    await this.askQuestion(result.nextQuestion, { isClarification: !!result.isClarification });
+    // Elegimos la próxima pregunta: primero las obligatorias del puesto
+    // (front-loaded), luego las orgánicas de leIA (ver pickNextQuestion).
+    const next = this.pickNextQuestion(result);
+    // Si es aclaración no avanzamos el índice de turno temático: sigue siendo
+    // la misma "pregunta" original, solo que reformulada.
+    if (!next.isClarification) this.turnIndex++;
+    await this.askQuestion(next.text, { isClarification: next.isClarification });
+  }
+
+  /**
+   * Decide la próxima pregunta. Las obligatorias del puesto van FRONT-LOADED:
+   * apenas termina el saludo, leIA hace primero TODAS las preguntas obligatorias
+   * (en orden), y recién cuando se agotan sigue con sus preguntas adaptativas.
+   * Las aclaraciones nunca consumen una obligatoria (reformulan la actual).
+   */
+  private pickNextQuestion(
+    result: EvaluateOutput
+  ): { text: string; isClarification: boolean } {
+    if (result.isClarification) {
+      return { text: result.nextQuestion, isClarification: true };
+    }
+    if (this.mustAsk.length > 0) {
+      const q = this.mustAsk.shift()!;
+      return { text: q, isClarification: false };
+    }
+    return { text: result.nextQuestion, isClarification: false };
   }
 
   /**
@@ -662,7 +737,7 @@ export class InterviewEngine {
         lastAnswer: candidateAnswer,
         turnIndex: this.turnIndex,
         elapsedSec,
-        cvText: this.interview.cvText,
+        cvText: this.cvText,
       });
       this.lastEvaluateResult = result;
 
@@ -682,7 +757,15 @@ export class InterviewEngine {
 
       this.turnIndex++;
 
-      if (result.shouldFinish) {
+      // Preguntas obligatorias en modo live: front-loaded. Mientras queden,
+      // la próxima instrucción es una obligatoria (en orden); recién cuando se
+      // agotan, Live sigue libre o cierra.
+      if (this.mustAsk.length > 0) {
+        const q = this.mustAsk.shift()!;
+        this.voiceSession?.sendTextInstruction(
+          `Ahora hacé esta pregunta obligatoria del puesto, con tus palabras pero sin cambiarle el sentido: "${q}"`
+        );
+      } else if (result.shouldFinish) {
         this.liveClosingRequested = true;
         this.voiceSession?.sendTextInstruction(
           'Es momento de cerrar la entrevista: agradecé brevemente al candidato y despedite.'
@@ -710,7 +793,7 @@ export class InterviewEngine {
     const fallbackQuestion =
       this.lastEvaluateResult?.nextQuestion ||
       this.livePendingQuestion ||
-      (await this.leia.firstQuestion({ job: this.job, candidateName: this.candidate.name, cvText: this.interview.cvText }));
+      (await this.leia.firstQuestion({ job: this.job, candidateName: this.candidate.name, cvText: this.cvText }));
 
     await this.askQuestion(fallbackQuestion);
   }
@@ -734,17 +817,39 @@ export class InterviewEngine {
         atMs: t.startMs - (transcripts[0]?.startMs ?? 0),
       }));
 
+    // Evaluaciones reales por turno: base determinística de ambos informes.
+    const evalForLeia = evaluations.map((e) => {
+      const turn = turns.find((t) => t.id === e.turnId);
+      return {
+        question: turn?.question ?? '',
+        transcript: turn?.answerTranscript ?? '',
+        score: e.score,
+        dims: e.dimensions,
+        flags: e.flags,
+      };
+    });
+    // ¿Hubo respuestas evaluables? Si el candidato no dijo nada (cortó al
+    // inicio, no habló), los informes NO inventan un puntaje: reflejan eso.
+    const hasAnswers = hasEvaluableAnswers(evalForLeia);
+
     let report1: Report | undefined;
     if (this.job.preferences.generateReport1) {
-      const payload1 = await this.leia.buildReport1({
-        job: this.job,
-        candidateName: this.candidate.name,
-        fullTranscript,
-        durationSec,
-        language: this.job.requirements.language,
-        behavior,
-        cvText: this.interview.cvText,
-      });
+      const payload1 = hasAnswers
+        ? await this.leia.buildReport1({
+            job: this.job,
+            candidateName: this.candidate.name,
+            fullTranscript,
+            durationSec,
+            language: this.job.requirements.language,
+            behavior,
+            cvText: this.cvText,
+          })
+        : buildInsufficientReport1({
+            fullTranscript,
+            durationSec,
+            language: this.job.requirements.language,
+            behavior,
+          });
       report1 = await this.db.createReport({
         id: uuid(),
         interviewId: this.interviewId,
@@ -759,38 +864,31 @@ export class InterviewEngine {
 
     let report2: Report | undefined;
     if (this.job.preferences.generateReport2) {
-      const evalForLeia = evaluations.map((e) => {
-        const turn = turns.find((t) => t.id === e.turnId);
-        return {
-          question: turn?.question ?? '',
-          transcript: turn?.answerTranscript ?? '',
-          score: e.score,
-          dims: e.dimensions,
-          flags: e.flags,
-        };
-      });
-      const payload2 = await this.leia.buildReport2({
-        job: this.job,
-        candidateName: this.candidate.name,
-        evaluations: evalForLeia,
-        behavior,
-        cvText: this.interview.cvText,
-      });
+      let payload2: Report2Payload;
 
-      // Analíticas determinísticas (no las dejamos al criterio del LLM):
-      // - qualityDistribution y turnsAnalyzed se calculan SIEMPRE desde los
-      //   scores reales por turno.
-      // - sentimentDistribution: si el LLM no devolvió una válida, caemos a la
-      //   derivada de señales objetivas.
-      const turnSignals = evalForLeia.map((e) => ({
-        score: e.score,
-        transcript: e.transcript,
-        flags: e.flags,
-      }));
-      payload2.qualityDistribution = computeQualityDistribution(turnSignals);
-      payload2.turnsAnalyzed = turnSignals.length;
-      if (isEmptySentiment(payload2.sentimentDistribution)) {
-        payload2.sentimentDistribution = computeSentimentFallback(turnSignals);
+      if (!hasAnswers) {
+        // Entrevista sin respuestas evaluables → informe honesto (score 0).
+        payload2 = buildInsufficientReport2(this.job, behavior);
+      } else {
+        const llmPayload = await this.leia.buildReport2({
+          job: this.job,
+          candidateName: this.candidate.name,
+          evaluations: evalForLeia,
+          behavior,
+          cvText: this.cvText,
+        });
+
+        // TODOS los números del informe (score, dimensiones del radar,
+        // softskills, stackScores, recomendación, quality/sentiment) se
+        // reconcilian con las evaluaciones reales por turno. Del LLM se conserva
+        // sólo el texto descriptivo. Así el informe es fiel a lo que pasó,
+        // coherente entre sus paneles, y el LLM no puede inflar.
+        payload2 = reconcileReport2(
+          llmPayload,
+          evalForLeia,
+          this.job.requirements.stack,
+          behavior
+        );
       }
 
       report2 = await this.db.createReport({
@@ -850,6 +948,8 @@ const SILENCE_MS = 700;
 const BOT_ECHO_TAIL_MS = 500;
 /** Espera tras detectar fin de llamada antes de finalizar (por si reconecta). */
 const AUTO_FINISH_DELAY_MS = 4000;
+/** Tope absoluto de turnos: red de seguridad contra entrevistas infinitas. */
+const HARD_MAX_TURNS = 40;
 
 // ============================================================
 // Registry para mantener engines activos por interview

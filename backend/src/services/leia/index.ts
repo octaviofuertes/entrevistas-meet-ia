@@ -5,11 +5,15 @@ import { ClaudeLeia } from './claude';
 import { GeminiLeia } from './gemini';
 import type {
   Job,
+  Company,
   InterviewTurn,
   DimensionScores,
   Report1Payload,
   Report2Payload,
   BehavioralAnalysis,
+  CvRecommendation,
+  JobQuestionKind,
+  CandidateProfile,
 } from '../../types';
 
 export interface EvaluateInput {
@@ -22,6 +26,8 @@ export interface EvaluateInput {
   elapsedSec: number;
   /** Texto plano del CV del candidato, si subió uno (Etapa 1). */
   cvText?: string | null;
+  /** RF-05: brechas de habilidades detectadas (puesto vs CV). */
+  gaps?: string[] | null;
 }
 
 export interface EvaluateOutput {
@@ -49,6 +55,7 @@ export interface StructureJobInput {
   description: string;
   knowledge: string;
   language: string;
+  company?: Company | null;
 }
 
 export interface StructureJobOutput {
@@ -58,6 +65,37 @@ export interface StructureJobOutput {
   responsibilities: string[];
   niceToHave: string[];
 }
+
+export interface ScreenCvInput {
+  job: Job;
+  cvText: string;
+  fileName: string;
+}
+
+export interface ScreenCvOutput {
+  score: number;
+  recommendation: CvRecommendation;
+  summary: string;
+  strengths: string[];
+  weaknesses: string[];
+}
+
+export interface CandidateRankingItem {
+  candidateId: string;
+  candidateName: string;
+  score: number;
+  recommendation: CvRecommendation;
+  summary: string;
+  strengths: string[];
+  weaknesses: string[];
+}
+
+export interface RankCandidatesInput {
+  job: Job;
+  candidates: Array<{ id: string; name: string; cvText: string }>;
+}
+
+export type RankCandidatesOutput = CandidateRankingItem[];
 
 export interface Report1Input {
   job: Job;
@@ -85,6 +123,42 @@ export interface Report2Input {
   cvText?: string | null;
 }
 
+// ============================================================
+// RF-02 — Generación automática del banco de preguntas
+// ============================================================
+export interface GenerateQuestionsInput {
+  job: Job;
+}
+
+export interface GeneratedQuestion {
+  text: string;
+  kind: JobQuestionKind;
+}
+
+// ============================================================
+// RF-03 — Parsing inteligente de CV (PDF/DOCX)
+// ============================================================
+export interface ParseCvInput {
+  cvText: string;
+  fileName: string;
+}
+
+export interface ParsedPersonalData {
+  nombre: string | null;
+  apellido: string | null;
+  dni: string | null;
+  fechaNacimiento: string | null;
+  edad: number | null;
+  telefono: string | null;
+  email: string | null;
+  ubicacion: string | null;
+}
+
+export interface ParseCvOutput {
+  personal: ParsedPersonalData;
+  profile: CandidateProfile;
+}
+
 export interface LeiaService {
   firstQuestion(input: FirstQuestionInput): Promise<string>;
   evaluate(input: EvaluateInput): Promise<EvaluateOutput>;
@@ -99,6 +173,21 @@ export interface LeiaService {
   generateClosing(input: FirstQuestionInput): Promise<string>;
   /** Estructura un puesto cargado por formulario: deduce stack, seniority y responsabilidades. */
   structureJob(input: StructureJobInput): Promise<StructureJobOutput>;
+  /** Evalúa un CV contra los requisitos de un puesto y devuelve score + recomendación. */
+  screenCv(input: ScreenCvInput): Promise<ScreenCvOutput>;
+  /** Rankea N candidatos (por CV) contra un puesto, del mejor al peor fit. */
+  rankCandidates(input: RankCandidatesInput): Promise<RankCandidatesOutput>;
+  /**
+   * RF-02 — Genera automáticamente el banco de 5 a 10 preguntas del puesto
+   * (técnicas del stack, situacionales sobre las responsabilidades y de
+   * descarte sobre requisitos excluyentes).
+   */
+  generateJobQuestions(input: GenerateQuestionsInput): Promise<GeneratedQuestion[]>;
+  /**
+   * RF-03 — Extrae datos personales y ficha resumen del texto de un CV
+   * (pipeline de extracción e inferencia, sin tipeo manual).
+   */
+  parseCv(input: ParseCvInput): Promise<ParseCvOutput>;
 }
 
 let instance: LeiaService | null = null;

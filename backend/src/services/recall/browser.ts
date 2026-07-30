@@ -19,7 +19,9 @@ type SalaMsg =
   | { type: 'status'; status: string; reason?: string }
   | { type: 'finished' }
   | { type: 'report_ready'; kind: number }
-  | { type: 'stop_audio' };
+  | { type: 'stop_audio' }
+  | { type: 'speaking_start' }
+  | { type: 'speaking_done' };
 
 class BrowserSalaBus {
   private clients = new Map<string, WebSocket>();
@@ -166,6 +168,16 @@ export class BrowserRecall implements RecallService {
   /** Notifica al frontend que un informe está listo. */
   forwardReportReady(kind: number) {
     browserSalaBus.send(this.interviewId, { type: 'report_ready', kind });
+  }
+
+  /** Señaliza que leIA está por empezar a hablar (no abrir el mic). */
+  forwardSpeakingStart() {
+    browserSalaBus.send(this.interviewId, { type: 'speaking_start' });
+  }
+
+  /** Señaliza que leIA terminó de enviar todos los chunks de audio. */
+  forwardSpeakingDone() {
+    browserSalaBus.send(this.interviewId, { type: 'speaking_done' });
   }
 }
 

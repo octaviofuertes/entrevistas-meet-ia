@@ -64,6 +64,37 @@ CREATE TABLE IF NOT EXISTS candidates (
 
 CREATE INDEX IF NOT EXISTS idx_candidates_email ON candidates (email);
 
+ALTER TABLE candidates ADD COLUMN IF NOT EXISTS cv_text TEXT;
+
+-- RF-02: banco de preguntas del puesto generado automáticamente por IA.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS questions JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+-- RF-03: datos personales y ficha resumen extraídos del CV por el parser IA.
+ALTER TABLE candidates ADD COLUMN IF NOT EXISTS last_name  TEXT;
+ALTER TABLE candidates ADD COLUMN IF NOT EXISTS dni        TEXT;
+ALTER TABLE candidates ADD COLUMN IF NOT EXISTS birth_date DATE;
+ALTER TABLE candidates ADD COLUMN IF NOT EXISTS age        INTEGER;
+ALTER TABLE candidates ADD COLUMN IF NOT EXISTS location   TEXT;
+ALTER TABLE candidates ADD COLUMN IF NOT EXISTS profile    JSONB;
+
+-- ----------------------------------------------------------------
+-- Applications (RF-01/RF-04) — postulación: candidato ↔ vacante + match
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS applications (
+    id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    job_id            UUID NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    candidate_id      UUID NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+    match_percent     NUMERIC(5,2) NOT NULL DEFAULT 0,
+    breakdown         JSONB NOT NULL DEFAULT '{}'::jsonb,
+    patterns          JSONB NOT NULL DEFAULT '{}'::jsonb,
+    resumen_ejecutivo TEXT NOT NULL DEFAULT '',
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (job_id, candidate_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_applications_job ON applications (job_id, match_percent DESC);
+CREATE INDEX IF NOT EXISTS idx_applications_candidate ON applications (candidate_id);
+
 -- ----------------------------------------------------------------
 -- Interviews
 -- ----------------------------------------------------------------
@@ -228,3 +259,41 @@ CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_logs (entity, entity_id);
 
 -- Migración: columna de grabación (idempotente, segura de re-ejecutar)
 ALTER TABLE interviews ADD COLUMN IF NOT EXISTS recording_id TEXT;
+
+-- ----------------------------------------------------------------
+-- Companies — perfil de empresa (vinculado opcionalmente a jobs)
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS companies (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name        TEXT NOT NULL,
+    logo_url    TEXT,
+    country     TEXT,
+    cuit        TEXT,
+    mission     TEXT,
+    vision      TEXT,
+    type        TEXT CHECK (type IS NULL OR type IN ('privada','publica','mixta')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_companies_name ON companies (name);
+
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES companies(id) ON DELETE SET NULL;
+
+-- ----------------------------------------------------------------
+-- CV Screenings — evaluación de CVs contra un puesto (preselección)
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS cv_screenings (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    job_id          UUID NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    file_name       TEXT NOT NULL DEFAULT '',
+    score           NUMERIC(4,2) NOT NULL DEFAULT 0,
+    recommendation  TEXT NOT NULL DEFAULT 'descartar'
+                    CHECK (recommendation IN ('contratar','entrevistar','descartar')),
+    summary         TEXT NOT NULL DEFAULT '',
+    strengths       JSONB NOT NULL DEFAULT '[]'::jsonb,
+    weaknesses      JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_cv_screenings_job ON cv_screenings (job_id);
