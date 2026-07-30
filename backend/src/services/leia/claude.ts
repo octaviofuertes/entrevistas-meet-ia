@@ -378,7 +378,7 @@ Devolvé SOLO el texto a decir.`;
     maxTokens: number;
     temperature: number;
   }): Promise<string> {
-    const res = await fetch(this.endpoint, {
+    const res = await fetchWithTimeout(this.endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -404,6 +404,31 @@ Devolvé SOLO el texto a decir.`;
       .join('');
     if (!text) throw new Error('Respuesta vacía de Claude');
     return text;
+  }
+}
+
+/**
+ * Timeout duro por request. Sin esto, una conexión colgada deja el fetch
+ * pendiente para siempre y el catch del caller nunca se dispara (sólo atrapa
+ * errores lanzados, no un fetch colgado) → informe que no se genera / leIA que
+ * no responde. Al abortar, se convierte en error → fallback al mock.
+ */
+const CLAUDE_TIMEOUT_MS = 30_000;
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs = CLAUDE_TIMEOUT_MS
+): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } catch (err: any) {
+    if (err?.name === 'AbortError') throw new Error(`Claude timeout (${timeoutMs}ms)`);
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

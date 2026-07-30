@@ -42,7 +42,8 @@
         </svg>
         <span style="font-size:14px">Generando informe{{ dots }}</span>
       </div>
-      <p style="font-size:12px;color:#5f6368;margin:0">leIA está analizando la entrevista. Esto tarda unos segundos.</p>
+      <p *ngIf="!reportSlow" style="font-size:12px;color:#5f6368;margin:0">leIA está analizando la entrevista. Esto tarda unos segundos.</p>
+      <p *ngIf="reportSlow" style="font-size:12px;color:#f0b429;margin:0;max-width:320px;text-align:center">El informe está tardando más de lo normal. Podés cerrar esta ventana — quedará disponible en el detalle de la entrevista.</p>
       <a [href]="frontendUrl + '/entrevistas/' + interviewId"
         style="font-size:12px;color:#8ab4f8;text-decoration:none;margin-top:4px">
         Ver detalle de la entrevista →

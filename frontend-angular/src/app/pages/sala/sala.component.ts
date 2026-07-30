@@ -74,6 +74,7 @@ export class SalaComponent implements OnInit, OnDestroy, AfterViewChecked {
   elapsed  = 0;
   recording = false;
   reportsReady: number[] = [];
+  reportSlow   = false;
   listening    = false;
   interimText  = '';
   dots = '';
@@ -93,6 +94,7 @@ export class SalaComponent implements OnInit, OnDestroy, AfterViewChecked {
   private ws:   WebSocket | null = null;
   private timerInt: any = null;
   private dotsInt:  any = null;
+  private reportSlowTimer: any = null;
 
   private audioCtx:     AudioContext | null = null;
   private masterGain:   GainNode | null = null;
@@ -161,6 +163,7 @@ export class SalaComponent implements OnInit, OnDestroy, AfterViewChecked {
     window.removeEventListener('beforeunload', this.onUnload);
     if (this.timerInt) clearInterval(this.timerInt);
     if (this.dotsInt)  clearInterval(this.dotsInt);
+    if (this.reportSlowTimer) { clearTimeout(this.reportSlowTimer); this.reportSlowTimer = null; }
     if (this.drainTimer) { clearTimeout(this.drainTimer); this.drainTimer = null; }
     this.ws?.close();
     this.streamRef?.getTracks().forEach(t => t.stop());
@@ -522,6 +525,12 @@ export class SalaComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.dotsInt = setInterval(() => this.zone.run(() => {
       this.dots = this.dots.length >= 3 ? '' : this.dots + '.';
     }), 500);
+    // Red de seguridad: si el informe no llega en un tiempo razonable (backend
+    // caído, WS perdido), no dejamos la pantalla en "Generando informe…" para
+    // siempre — avisamos que quedará disponible en el detalle de la entrevista.
+    this.reportSlowTimer = setTimeout(() => {
+      if (!this.hasReport) this.zone.run(() => this.reportSlow = true);
+    }, 45_000);
   }
 
   // ── Controls ──────────────────────────────────────────────────────────────

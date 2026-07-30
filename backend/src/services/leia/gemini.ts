@@ -444,7 +444,7 @@ No agregues texto fuera del JSON.`;
     // retry también falla, lanzamos para que el caller caiga al mock. Mejor UX
     // que esperar 50s para una respuesta de modelo.
     for (let attempt = 0; attempt < 2; attempt++) {
-      const res = await fetch(url, {
+      const res = await fetchWithTimeout(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -473,6 +473,33 @@ No agregues texto fuera del JSON.`;
       throw new Error(`Gemini ${res.status}: ${txt.slice(0, 400)}`);
     }
     throw new Error('Gemini: retry exhausted');
+  }
+}
+
+/**
+ * Timeout duro para cada request a Gemini. Sin esto, una conexión que se cuelga
+ * (sin respuesta, sin cerrar) deja el fetch pendiente PARA SIEMPRE: como los
+ * catch de buildReport/evaluate sólo atrapan errores lanzados —no un fetch
+ * colgado—, el caller nunca cae al mock. En generateReports() eso se ve como
+ * "Generando informe…" infinito; durante la entrevista, como leIA que no
+ * responde. Con el timeout, un cuelgue se convierte en error → fallback al mock.
+ */
+const GEMINI_TIMEOUT_MS = 30_000;
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs = GEMINI_TIMEOUT_MS
+): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } catch (err: any) {
+    if (err?.name === 'AbortError') throw new Error(`Gemini timeout (${timeoutMs}ms)`);
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
