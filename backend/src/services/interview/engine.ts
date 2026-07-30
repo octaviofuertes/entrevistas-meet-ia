@@ -557,118 +557,134 @@ export class InterviewEngine {
     this.committing = true;
     this.answerBuffer = [];
 
-    if (this.botId && this.fillerAudios.length > 0 && !this.fillerPlaying) {
-      this.fillerPlaying = true;
-      const pick = this.fillerAudios[Math.floor(Math.random() * this.fillerAudios.length)];
-      this.markBotSpeaking(pick.durationMs);
-      this.recall.playAudio({
-        interviewId: this.interviewId,
-        botId: this.botId,
-        audioBase64: pick.audioBase64,
-        mimeType: pick.mimeType,
-        text: '(muletilla)',
-      }).catch(() => {}).finally(() => { this.fillerPlaying = false; });
-    }
-
-    const durationSec =
-      this.answerStartedAtMs > 0 ? Math.max(1, Math.round((Date.now() - this.answerStartedAtMs) / 1000)) : 1;
-
-    const updatedTurn = await this.db.updateTurn(this.currentTurn.id, {
-      answerTranscript: text,
-      answerAt: new Date().toISOString(),
-      durationSec,
-    });
-    if (!updatedTurn) return;
-
-    const history = await this.db.listTurns(this.interviewId);
-    const elapsedSec = Math.round((Date.now() - this.startedAtMs) / 1000);
-
-    let result = await this.leia.evaluate({
-      job: this.job,
-      candidateName: this.candidate.name,
-      history,
-      lastQuestion: this.currentQuestion,
-      lastAnswer: text,
-      turnIndex: this.turnIndex,
-      elapsedSec,
-      cvText: this.cvText,
-      gaps: this.gaps,
-    });
-
-    // Cinturón de seguridad: si la próxima pregunta es muy parecida a alguna ya
-    // hecha (Jaccard > 0.6), forzamos a leIA a regenerar una distinta.
-    if (!result.shouldFinish && history.length > 0) {
-      const repeat = findSimilarQuestion(result.nextQuestion, history.map((h) => h.question));
-      if (repeat) {
-        logger.info({ existing: repeat, generated: result.nextQuestion }, 'leIA repitió pregunta, regenerando');
-        const retried = await this.leia.evaluate({
-          job: this.job,
-          candidateName: this.candidate.name,
-          history,
-          lastQuestion: this.currentQuestion,
-          lastAnswer:
-            text +
-            ` [Nota interna: la pregunta "${truncate(result.nextQuestion, 120)}" es muy parecida a "${truncate(repeat, 120)}" — generá una distinta, sobre otro ángulo del puesto.]`,
-          turnIndex: this.turnIndex,
-          elapsedSec,
-          cvText: this.cvText,
-        });
-        // Si la segunda también es similar, dejamos pasar para no entrar en loop.
-        result = retried;
-      }
-    }
-
-    const evaluation: Evaluation = {
-      id: uuid(),
-      interviewId: this.interviewId,
-      turnId: updatedTurn.id,
-      score: result.evaluation.score,
-      dimensions: result.evaluation.dimensions,
-      flags: result.evaluation.flags,
-      rationale: result.evaluation.rationale,
-      createdAt: new Date().toISOString(),
-    };
-    await this.db.createEvaluation(evaluation);
-    await this.db.updateTurn(updatedTurn.id, { evaluationId: evaluation.id });
-    this.emit('leia_evaluation_ready', { evaluation, turnId: updatedTurn.id });
-
-    // Solo se puede cerrar cuando NO quedan preguntas obligatorias pendientes.
-    // El hard-stop es una red de seguridad contra entrevistas infinitas si el
-    // driver nunca marca shouldFinish.
-    const hardStop = this.turnIndex >= HARD_MAX_TURNS;
-    if ((result.shouldFinish && this.mustAsk.length === 0) || hardStop) {
-      const closing = await this.leia.generateClosing({
-        job: this.job,
-        candidateName: this.candidate.name,
-      });
-      this.emit('question_generated', { question: closing, index: this.turnIndex + 1, isClosing: true });
-      const audio = await this.tts.synthesize(closing);
-      this.emit('audio_generated', {
-        text: closing,
-        mimeType: audio.mimeType,
-        durationMs: audio.durationMs,
-        bytes: audio.bytes,
-      });
-      if (this.botId) {
-        await this.recall.playAudio({
+    // `committing` se libera SIEMPRE en el finally. Antes sólo se reseteaba dentro
+    // de askQuestion()→resetAnswerState(); si cualquier await de acá lanzaba
+    // (típicamente leia.evaluate() por timeout/rate-limit del LLM, o un updateTurn
+    // que devolvía null), el flag quedaba en true para siempre y leIA no volvía a
+    // responder en TODA la entrevista ("a veces no responde"). Con el finally, un
+    // fallo transitorio se salta ese turno pero el motor se recupera en la próxima
+    // respuesta del candidato.
+    try {
+      if (this.botId && this.fillerAudios.length > 0 && !this.fillerPlaying) {
+        this.fillerPlaying = true;
+        const pick = this.fillerAudios[Math.floor(Math.random() * this.fillerAudios.length)];
+        this.markBotSpeaking(pick.durationMs);
+        this.recall.playAudio({
           interviewId: this.interviewId,
           botId: this.botId,
-          audioBase64: audio.audioBase64,
-          mimeType: audio.mimeType,
-          text: closing,
-        });
+          audioBase64: pick.audioBase64,
+          mimeType: pick.mimeType,
+          text: '(muletilla)',
+        }).catch(() => {}).finally(() => { this.fillerPlaying = false; });
       }
-      await this.stop('auto');
-      return;
-    }
 
-    // Elegimos la próxima pregunta: primero las obligatorias del puesto
-    // (front-loaded), luego las orgánicas de leIA (ver pickNextQuestion).
-    const next = this.pickNextQuestion(result);
-    // Si es aclaración no avanzamos el índice de turno temático: sigue siendo
-    // la misma "pregunta" original, solo que reformulada.
-    if (!next.isClarification) this.turnIndex++;
-    await this.askQuestion(next.text, { isClarification: next.isClarification });
+      const durationSec =
+        this.answerStartedAtMs > 0 ? Math.max(1, Math.round((Date.now() - this.answerStartedAtMs) / 1000)) : 1;
+
+      const updatedTurn = await this.db.updateTurn(this.currentTurn.id, {
+        answerTranscript: text,
+        answerAt: new Date().toISOString(),
+        durationSec,
+      });
+      if (!updatedTurn) return;
+
+      const history = await this.db.listTurns(this.interviewId);
+      const elapsedSec = Math.round((Date.now() - this.startedAtMs) / 1000);
+
+      let result = await this.leia.evaluate({
+        job: this.job,
+        candidateName: this.candidate.name,
+        history,
+        lastQuestion: this.currentQuestion,
+        lastAnswer: text,
+        turnIndex: this.turnIndex,
+        elapsedSec,
+        cvText: this.cvText,
+        gaps: this.gaps,
+      });
+
+      // Cinturón de seguridad: si la próxima pregunta es muy parecida a alguna ya
+      // hecha (Jaccard > 0.6), forzamos a leIA a regenerar una distinta.
+      if (!result.shouldFinish && history.length > 0) {
+        const repeat = findSimilarQuestion(result.nextQuestion, history.map((h) => h.question));
+        if (repeat) {
+          logger.info({ existing: repeat, generated: result.nextQuestion }, 'leIA repitió pregunta, regenerando');
+          const retried = await this.leia.evaluate({
+            job: this.job,
+            candidateName: this.candidate.name,
+            history,
+            lastQuestion: this.currentQuestion,
+            lastAnswer:
+              text +
+              ` [Nota interna: la pregunta "${truncate(result.nextQuestion, 120)}" es muy parecida a "${truncate(repeat, 120)}" — generá una distinta, sobre otro ángulo del puesto.]`,
+            turnIndex: this.turnIndex,
+            elapsedSec,
+            cvText: this.cvText,
+          });
+          // Si la segunda también es similar, dejamos pasar para no entrar en loop.
+          result = retried;
+        }
+      }
+
+      const evaluation: Evaluation = {
+        id: uuid(),
+        interviewId: this.interviewId,
+        turnId: updatedTurn.id,
+        score: result.evaluation.score,
+        dimensions: result.evaluation.dimensions,
+        flags: result.evaluation.flags,
+        rationale: result.evaluation.rationale,
+        createdAt: new Date().toISOString(),
+      };
+      await this.db.createEvaluation(evaluation);
+      await this.db.updateTurn(updatedTurn.id, { evaluationId: evaluation.id });
+      this.emit('leia_evaluation_ready', { evaluation, turnId: updatedTurn.id });
+
+      // Solo se puede cerrar cuando NO quedan preguntas obligatorias pendientes.
+      // El hard-stop es una red de seguridad contra entrevistas infinitas si el
+      // driver nunca marca shouldFinish.
+      const hardStop = this.turnIndex >= HARD_MAX_TURNS;
+      if ((result.shouldFinish && this.mustAsk.length === 0) || hardStop) {
+        const closing = await this.leia.generateClosing({
+          job: this.job,
+          candidateName: this.candidate.name,
+        });
+        this.emit('question_generated', { question: closing, index: this.turnIndex + 1, isClosing: true });
+        const audio = await this.tts.synthesize(closing);
+        this.emit('audio_generated', {
+          text: closing,
+          mimeType: audio.mimeType,
+          durationMs: audio.durationMs,
+          bytes: audio.bytes,
+        });
+        if (this.botId) {
+          await this.recall.playAudio({
+            interviewId: this.interviewId,
+            botId: this.botId,
+            audioBase64: audio.audioBase64,
+            mimeType: audio.mimeType,
+            text: closing,
+          });
+        }
+        await this.stop('auto');
+        return;
+      }
+
+      // Elegimos la próxima pregunta: primero las obligatorias del puesto
+      // (front-loaded), luego las orgánicas de leIA (ver pickNextQuestion).
+      const next = this.pickNextQuestion(result);
+      // Si es aclaración no avanzamos el índice de turno temático: sigue siendo
+      // la misma "pregunta" original, solo que reformulada.
+      if (!next.isClarification) this.turnIndex++;
+      await this.askQuestion(next.text, { isClarification: next.isClarification });
+    } catch (err) {
+      logger.error(
+        { err, interviewId: this.interviewId },
+        'commitAnswer falló; se libera el turno para que leIA se recupere en la próxima respuesta'
+      );
+    } finally {
+      this.committing = false;
+    }
   }
 
   /**

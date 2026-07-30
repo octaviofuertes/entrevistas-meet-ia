@@ -10,6 +10,7 @@ import {
 } from './engine';
 import { getRecall } from '../recall';
 import { getBrowserRecall } from '../recall/browser';
+import { MockLeia } from '../leia/mock';
 import type { Job, Candidate, Interview } from '../../types';
 import { ALL_DIMENSIONS } from '../../types';
 
@@ -111,6 +112,42 @@ function captureNextAudioDurationMs(engine: InterviewEngine): Promise<number> {
   });
 }
 
+/** Polleá una condición hasta que se cumpla o venza el timeout (robusto en entornos lentos). */
+async function waitFor(
+  check: () => Promise<boolean> | boolean,
+  timeoutMs = 8000,
+  stepMs = 100
+): Promise<boolean> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (await check()) return true;
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+  return false;
+}
+
+/**
+ * Envuelve un MockLeia (determinista, offline) para inyectarlo en el engine sin
+ * depender de LEIA_DRIVER del .env, haciendo que las primeras `failFirst`
+ * llamadas a evaluate() lancen (simula timeouts/rate-limits del LLM).
+ */
+function flakyMockLeia(failFirst: number): any {
+  const mock = new MockLeia();
+  let remaining = failFirst;
+  return new Proxy(mock, {
+    get(target, prop, receiver) {
+      if (prop === 'evaluate') {
+        return async (...args: any[]) => {
+          if (remaining > 0) { remaining--; throw new Error('LLM timeout simulado'); }
+          return (target as any).evaluate(...args);
+        };
+      }
+      const v = Reflect.get(target, prop, receiver);
+      return typeof v === 'function' ? v.bind(target) : v;
+    },
+  });
+}
+
 describe('InterviewEngine — caracterización (drivers mock)', () => {
   it('modo meet: commitea la respuesta tras SILENCE_MS de silencio real', async () => {
     const { db, interview, engine } = await setup('meet');
@@ -176,6 +213,39 @@ describe('InterviewEngine — caracterización (drivers mock)', () => {
     disposeEngine(interview.id);
     engine.dispose();
   }, 10000);
+
+  it('modo browser: se recupera si leia.evaluate() falla en un turno (no queda muda)', async () => {
+    const { db, interview, engine } = await setup('browser');
+    // Driver mock hermético: la PRIMERA evaluación lanza (simula timeout del LLM).
+    // Regresión del bug "a veces no responde": antes, un throw en commitAnswer
+    // dejaba `committing=true` para siempre → leIA no volvía a responder nunca.
+    (engine as any).leia = flakyMockLeia(1);
+    await engine.start();
+
+    // Turno 1: el commit corre (updateTurn) pero la evaluación lanza → 0 evaluaciones.
+    getBrowserRecall(interview.id).ingestCaption(
+      'Primera respuesta detallada sobre mi experiencia trabajando en varios proyectos de frontend',
+      true
+    );
+    const committed1 = await waitFor(async () => {
+      const turns = await db.listTurns(interview.id);
+      return !!turns[0]?.answerTranscript.includes('Primera respuesta detallada');
+    });
+    expect(committed1).toBe(true);
+    expect((await db.listEvaluations(interview.id)).length).toBe(0);
+
+    // Turno 2: leIA se recupera y evalúa. SIN el fix, committing seguiría en true
+    // y esto nunca llegaría a 1 (se quedaría muda).
+    getBrowserRecall(interview.id).ingestCaption(
+      'Segunda respuesta con detalle sobre cómo resolví un problema técnico usando React y Node en producción',
+      true
+    );
+    const recovered = await waitFor(async () => (await db.listEvaluations(interview.id)).length >= 1);
+    expect(recovered).toBe(true);
+
+    disposeEngine(interview.id);
+    engine.dispose();
+  }, 20000);
 
   it('respuesta vacía/muy corta dispara aclaración sin avanzar turnIndex', async () => {
     const { db, interview, engine } = await setup('meet');
